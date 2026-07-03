@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KAZAKHSTAN — Interactive Digital Atlas</title>
+  <style>
+    :root {
+      --gold: #e8c47a;
+      --ink: rgba(10, 12, 16, 0.55);
+      --line: rgba(232, 196, 122, 0.45);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: #000; }
+    body {
+      font-family: "Avenir Next", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      color: #e9e4d8;
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+      cursor: default;
+    }
+    #app { position: fixed; inset: 0; }
+    canvas { display: block; }
+
+    /* ---------- Title ---------- */
+    #title {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 2.8s ease;
+      text-align: center;
+      z-index: 20;
+    }
+    #title.visible { opacity: 1; }
+    #title h1 {
+      font-size: clamp(42px, 7vw, 96px);
+      font-weight: 300;
+      letter-spacing: 0.42em;
+      text-indent: 0.42em;
+      color: #f3ecdc;
+      text-shadow: 0 0 60px rgba(232, 196, 122, 0.35);
+    }
+    #title h2 {
+      margin-top: 18px;
+      font-size: clamp(11px, 1.3vw, 16px);
+      font-weight: 400;
+      letter-spacing: 0.55em;
+      text-indent: 0.55em;
+      text-transform: uppercase;
+      color: var(--gold);
+      opacity: 0.85;
+    }
+
+    /* ---------- HUD ---------- */
+    #hud {
+      position: fixed;
+      left: 48px; bottom: 48px;
+      z-index: 20;
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 1.8s ease, transform 1.8s ease;
+      pointer-events: none;
+    }
+    #hud.visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+    #hud .rule {
+      width: 240px; height: 1px;
+      background: linear-gradient(90deg, var(--line), transparent);
+      margin: 14px 0;
+    }
+    #hud .brand {
+      font-size: 15px; font-weight: 500;
+      letter-spacing: 0.35em;
+      color: #f3ecdc;
+    }
+    #hud .sub {
+      margin-top: 4px;
+      font-size: 9px; letter-spacing: 0.32em;
+      text-transform: uppercase;
+      color: rgba(233, 228, 216, 0.55);
+    }
+    #hud .label {
+      font-size: 9px; letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: rgba(232, 196, 122, 0.7);
+      margin-bottom: 6px;
+    }
+    #hud .region {
+      font-size: 22px; font-weight: 300;
+      letter-spacing: 0.12em;
+      color: #fff;
+    }
+    #hud .explore {
+      display: inline-block;
+      margin-top: 18px;
+      font-size: 11px; letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--gold);
+      background: none; border: none;
+      font-family: inherit;
+      cursor: pointer;
+      padding: 10px 0;
+      transition: letter-spacing 0.5s ease, color 0.5s ease;
+    }
+    #hud .explore:hover { letter-spacing: 0.42em; color: #fff; }
+
+    /* ---------- Atlas overlay ---------- */
+    #atlas {
+      position: fixed; inset: 0;
+      z-index: 30;
+      background: radial-gradient(ellipse at 50% 45%, rgba(8, 12, 22, 0.92), rgba(2, 3, 6, 0.97));
+      backdrop-filter: blur(6px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 1.2s ease;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+    }
+    #atlas.visible { opacity: 1; pointer-events: auto; }
+    #atlas header {
+      position: absolute; top: 44px; left: 0; right: 0;
+      text-align: center;
+    }
+    #atlas header .t1 {
+      font-size: 13px; letter-spacing: 0.45em; text-indent: 0.45em;
+      color: #f3ecdc;
+    }
+    #atlas header .t2 {
+      margin-top: 8px;
+      font-size: 9px; letter-spacing: 0.35em; text-indent: 0.35em;
+      text-transform: uppercase; color: rgba(232, 196, 122, 0.6);
+    }
+    #atlas-map { width: min(78vw, 1000px); height: auto; overflow: visible; }
+    #atlas .close {
+      position: absolute; top: 40px; right: 48px;
+      background: none; border: none;
+      color: rgba(233, 228, 216, 0.6);
+      font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase;
+      font-family: inherit; cursor: pointer;
+      padding: 10px;
+      transition: color 0.4s ease;
+    }
+    #atlas .close:hover { color: #fff; }
+    #atlas footer {
+      position: absolute; bottom: 46px; left: 0; right: 0;
+      text-align: center;
+      font-size: 9px; letter-spacing: 0.3em; text-transform: uppercase;
+      color: rgba(233, 228, 216, 0.35);
+    }
+    #atlas-tip {
+      position: fixed;
+      z-index: 31;
+      pointer-events: none;
+      font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase;
+      color: #f3ecdc;
+      background: rgba(6, 9, 16, 0.85);
+      border: 1px solid rgba(232, 196, 122, 0.25);
+      padding: 8px 14px;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+      white-space: nowrap;
+    }
+
+    /* ---------- Sound hint ---------- */
+    #sound-hint {
+      position: fixed;
+      right: 48px; bottom: 48px;
+      z-index: 20;
+      font-size: 9px; letter-spacing: 0.3em; text-transform: uppercase;
+      color: rgba(233, 228, 216, 0.35);
+      opacity: 0;
+      transition: opacity 2s ease;
+      pointer-events: none;
+    }
+    #sound-hint.visible { opacity: 1; }
+
+    /* ---------- Vignette ---------- */
+    #vignette {
+      position: fixed; inset: 0;
+      z-index: 10; pointer-events: none;
+      background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.45) 100%);
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="vignette"></div>
+
+  <div id="title">
+    <h1>KAZAKHSTAN</h1>
+    <h2>Interactive Digital Atlas</h2>
+  </div>
+
+  <div id="hud">
+    <div class="rule"></div>
+    <div class="brand">KAZAKHSTAN</div>
+    <div class="sub">Interactive Digital Atlas</div>
+    <div class="rule"></div>
+    <div class="label">Current Region</div>
+    <div class="region" id="hud-region">Trans-Ili Alatau</div>
+    <button class="explore" id="hud-explore">Explore &nbsp;→</button>
+    <div class="rule"></div>
+  </div>
+
+  <div id="atlas">
+    <header>
+      <div class="t1">THE ATLAS</div>
+      <div class="t2">Every journey leaves a trace of light</div>
+    </header>
+    <svg id="atlas-map" xmlns="http://www.w3.org/2000/svg"></svg>
+    <button class="close" id="atlas-close">Return</button>
+    <footer id="atlas-footer">1 of 17 places discovered</footer>
+  </div>
+  <div id="atlas-tip"></div>
+
+  <div id="sound-hint">Click anywhere for sound</div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
