@@ -43,6 +43,62 @@ const smoothstep = (a, b, x) => {
   return t * t * (3 - 2 * t);
 };
 
+// ---------------------------------------------------------------------------
+// Real-DEM sampler: maps a decoded terrarium height grid into scene space,
+// rebased at a chosen "station" (where the camera stands) and auto-framed on
+// the highest summit in the forward arc. Preserves real proportions (with an
+// optional vertical exaggeration) inside the director's existing unit budget.
+// ---------------------------------------------------------------------------
+function buildDemSampler(P, demGrid) {
+  const { sample, meta } = demGrid;
+  const cfg = P.dem;
+  const mpp = meta.metersPerPixel;
+  const upm = cfg.unitsPerMeter;
+  const vExag = cfg.vExag;
+  const [uS, vS] = cfg.station;
+  const spanX = meta.width * mpp * upm;   // full E–W extent, scene units
+  const spanZ = meta.height * mpp * upm;  // full N–S extent, scene units
+  const elevStation = sample(uS, vS);
+  const clamp01 = (x) => Math.min(1, Math.max(0, x));
+
+  // world (x,z) → DEM (u,v). +X east, −Z south (in front of the camera).
+  const uvOf = (x, z) => [clamp01(uS + x / spanX), clamp01(vS - z / spanZ)];
+  const height = (x, z) => {
+    const [u, v] = uvOf(x, z);
+    return (sample(u, v) - elevStation) * upm * vExag;
+  };
+
+  const xMin = -uS * spanX, xMax = (1 - uS) * spanX;
+  const zBack = vS * spanZ, zFront = -(1 - vS) * spanZ;
+
+  // find the tallest summit in the forward view to aim the camera at
+  let best = { h: -Infinity, x: 0, z: zFront * 0.5 };
+  const vHi = Math.min(0.97, 1);
+  for (let iv = 0; iv <= 48; iv++) {
+    const v = (vS + 0.04) + (vHi - (vS + 0.04)) * (iv / 48);
+    for (let iu = 0; iu <= 48; iu++) {
+      const u = 0.12 + 0.76 * (iu / 48);
+      const e = sample(u, v);
+      if (e > best.h) best = { h: e, x: (u - uS) * spanX, z: -(v - vS) * spanZ };
+    }
+  }
+  const peakY = (best.h - elevStation) * upm * vExag;
+  // aerial vantage: hover near peak-shoulder height, a set distance north of
+  // the summit, looking south across the range (matches the reference plate)
+  const camY = peakY * (cfg.heightFrac ?? 0.85);
+  const viewDist = (cfg.viewDistFrac ?? 0.32) * spanZ;
+  const stand = new THREE.Vector3(best.x * 0.35, camY, best.z + viewDist);
+  const look = new THREE.Vector3(best.x, peakY * 0.92, best.z);
+  const anchors = {
+    stand,
+    lookRest: look,
+    entryPos: new THREE.Vector3(best.x * 0.1, camY + spanZ * 0.12, stand.z + spanZ * 0.14),
+    entryLook: new THREE.Vector3(best.x * 0.6, peakY * 0.65, best.z * 0.6),
+  };
+
+  return { height, uvOf, xMin, xMax, zFront, zBack, anchors, peak: best, peakY, stand };
+}
+
 const NOISE_GLSL = /* glsl */ `
   float hash21(vec2 p) {
     p = fract(p * vec2(234.34, 435.345));
@@ -137,6 +193,17 @@ const PRESETS = {
     entryLook: [0, 10, -60],
     birds: { height: [30, 60], radius: [35, 85], cz: -24 },
     beacons: [{ to: 'big-almaty-lake', name: 'Big Almaty Lake', x: -38, z: -150, h: 58 }],
+    // real elevation of the range south of Almaty (Talgar massif, ~4979m)
+    dem: {
+      station: [0.5, 0.20],   // reference point; camera auto-frames the summit
+      unitsPerMeter: 0.05,
+      vExag: 1.35,
+      heightFrac: 0.82,       // hover at 82% of summit height
+      viewDistFrac: 0.34,     // this far north of the summit
+      fogColor: [0.62, 0.55, 0.52],
+      fogDensity: 0.00034,
+      segX: 700, segZ: 466,
+    },
   },
 
   'big-almaty-lake': {
@@ -205,19 +272,27 @@ const PRESETS = {
 };
 
 // ---------------------------------------------------------------------------
-export function createTerrainScene(id) {
+export function presetHasDem(id) {
+  return !!PRESETS[id]?.dem;
+}
+
+export function createTerrainScene(id, assets = {}) {
   const P = PRESETS[id];
   if (!P) throw new Error(`unknown location preset: ${id}`);
-  const H = P.heightFn;
+  const D = P.dem && assets.demGrid ? buildDemSampler(P, assets.demGrid) : null;
+  const DEM = !!D;
+  const H = DEM ? D.height : P.heightFn;
   const scene = new THREE.Scene();
 
+  const fogColor = DEM ? (P.dem.fogColor ?? P.fog.color) : P.fog.color;
+  const fogDensity = DEM ? P.dem.fogDensity : P.fog.density;
   const uniforms = {
     uTime: { value: 0 },
     uSunDir: { value: new THREE.Vector3(...P.sunDir).normalize() },
     uSunCol: { value: new THREE.Color(...P.sun.color).multiplyScalar(P.sun.power) },
     uAmbient: { value: new THREE.Color(...P.ambient) },
-    uFogColor: { value: new THREE.Color(...P.fog.color) },
-    uFogDensity: { value: P.fog.density },
+    uFogColor: { value: new THREE.Color(...fogColor) },
+    uFogDensity: { value: fogDensity },
     uZenith: { value: new THREE.Color(...P.sky.zenith) },
     uHorizon: { value: new THREE.Color(...P.sky.horizon) },
     uSkyBloom: { value: P.sky.bloom },
@@ -262,7 +337,80 @@ export function createTerrainScene(id) {
   });
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 20), skyMat));
 
-  // ---- terrain ----------------------------------------------------------------
+  // ---- real-DEM terrain (satellite-draped) ------------------------------------
+  if (DEM) {
+    const geomW = D.xMax - D.xMin, geomD = D.zBack - D.zFront;
+    const cx = (D.xMax + D.xMin) / 2, cz = (D.zBack + D.zFront) / 2;
+    const segX = P.dem.segX ?? 640, segZ = P.dem.segZ ?? 440;
+    const g = new THREE.PlaneGeometry(geomW, geomD, segX, segZ);
+    g.rotateX(-Math.PI / 2);
+    g.translate(cx, 0, cz);
+    const pos = g.attributes.position, uvA = g.attributes.uv;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      pos.setY(i, D.height(x, z));
+      const [u, v] = D.uvOf(x, z);
+      uvA.setXY(i, u, 1 - v); // texture row 0 is south (flipY); DEM v=0 is north
+    }
+    g.computeVertexNormals();
+    const demMat = new THREE.ShaderMaterial({
+      uniforms: { ...uniforms, uSat: { value: assets.satelliteTex ?? null } },
+      vertexShader: /* glsl */ `
+        varying vec3 vNormal; varying vec3 vWorld; varying vec2 vUv;
+        void main() {
+          vNormal = normal; vWorld = position; vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uSat;
+        uniform vec3 uSunDir, uSunCol, uAmbient, uFogColor;
+        uniform float uTime, uFogDensity;
+        varying vec3 vNormal; varying vec3 vWorld; varying vec2 vUv;
+        ${NOISE_GLSL}
+        void main() {
+          vec3 n = normalize(vNormal);
+          float dist = length(vWorld - cameraPosition);
+
+          // near-field detail normal — hides the coarse DEM tessellation
+          float be = 1.1, bs = 0.05;
+          float bump = exp(-dist * 0.004) * 1.5;
+          float hL = fbm((vWorld.xz - vec2(be, 0.0)) * bs);
+          float hR = fbm((vWorld.xz + vec2(be, 0.0)) * bs);
+          float hD = fbm((vWorld.xz - vec2(0.0, be)) * bs);
+          float hU = fbm((vWorld.xz + vec2(0.0, be)) * bs);
+          n = normalize(n + vec3((hL - hR) * bump, 0.0, (hD - hU) * bump));
+
+          vec3 albedo = texture2D(uSat, vUv).rgb;
+          float lum = dot(albedo, vec3(0.299, 0.587, 0.114));
+          albedo = mix(vec3(lum), albedo, 1.16);        // gentle saturation lift
+          albedo = pow(max(albedo, 0.0), vec3(0.90));    // lift midtones
+
+          float ndl = dot(n, uSunDir);
+          // soft key: the mosaic already carries flat daylight, so add warmth
+          // and terrain self-shading without crushing it to black
+          float key = 0.45 + 0.7 * max(ndl, 0.0);
+          vec3 sky = uAmbient * (0.65 + 0.35 * n.y);
+          vec3 col = albedo * (uSunCol * key * 0.5 + sky);
+
+          // alpenglow: real snow/glacier pixels burn gold where the low sun
+          // strikes, and take a cool sky-fill where they fall into shadow
+          float snow = smoothstep(0.5, 0.8, lum);
+          col += snow * vec3(1.0, 0.55, 0.30) * pow(max(ndl, 0.0), 1.3) * 0.7;
+          col += snow * vec3(0.34, 0.42, 0.62) * (1.0 - max(ndl, 0.0)) * 0.18;
+
+          float fogAmt = 1.0 - exp(-dist * uFogDensity);
+          col = mix(col, uFogColor, fogAmt);
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
+    });
+    const mesh = new THREE.Mesh(g, demMat);
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;
+    scene.add(mesh);
+  } else {
+  // ---- procedural terrain -----------------------------------------------------
   const SIZE = 1600, SEGS = 400, CENTER_Z = -260;
   const tGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEGS, SEGS);
   tGeo.rotateX(-Math.PI / 2);
@@ -350,11 +498,12 @@ export function createTerrainScene(id) {
     `,
   });
   scene.add(new THREE.Mesh(tGeo, terrMat));
+  }
 
-  const standH = H(P.stand.x, P.stand.z);
+  const standH = DEM ? 0 : H(P.stand.x, P.stand.z);
 
   // ---- water (Big Almaty Lake's turquoise mirror) -----------------------------
-  if (P.water) {
+  if (P.water && !DEM) {
     const W = P.water;
     const wGeo = new THREE.CircleGeometry(W.radius, 72);
     wGeo.rotateX(-Math.PI / 2);
@@ -436,7 +585,7 @@ export function createTerrainScene(id) {
   }
 
   // grass
-  {
+  if (!DEM) {
     const G = P.grass;
     const blade = new THREE.PlaneGeometry(0.09, 0.9, 1, 3);
     blade.translate(0, 0.45, 0);
@@ -499,7 +648,7 @@ export function createTerrainScene(id) {
   }
 
   // wildflowers
-  {
+  if (!DEM) {
     const F = P.flowers;
     const fBase = new THREE.PlaneGeometry(0.15, 0.15);
     fBase.translate(0, 0.42, 0);
@@ -560,7 +709,7 @@ export function createTerrainScene(id) {
   }
 
   // Tian Shan spruce — narrow dark spires on the slopes
-  if (P.spruce) {
+  if (P.spruce && !DEM) {
     const S = P.spruce;
     const cone = new THREE.ConeGeometry(1, 1, 6, 3);
     cone.translate(0, 0.5, 0);
@@ -654,7 +803,7 @@ export function createTerrainScene(id) {
     return tex;
   })();
   const cloudSprites = [];
-  {
+  if (!DEM) {
     const C = P.clouds;
     for (let i = 0; i < C.count; i++) {
       const mat = new THREE.SpriteMaterial({
@@ -676,8 +825,34 @@ export function createTerrainScene(id) {
     }
   }
 
+  // ---- valley cloud sea (DEM scenes) — banks pooling between the ridges --------
+  if (DEM) {
+    const spanX = D.xMax - D.xMin;
+    const level = D.peakY * 0.17;
+    for (let i = 0; i < 50; i++) {
+      const mat = new THREE.SpriteMaterial({
+        map: cloudTex, transparent: true, depthWrite: false,
+        opacity: 0.26 + Math.random() * 0.36,
+        color: new THREE.Color(1.0, 0.94, 0.88),
+      });
+      const s = new THREE.Sprite(mat);
+      const x = D.xMin * 0.92 + Math.random() * spanX * 0.92;
+      const zNear = D.stand.z - 60;
+      const z = D.zFront * 0.9 + Math.random() * (zNear - D.zFront * 0.9);
+      s.position.set(x, level + (Math.random() - 0.5) * D.peakY * 0.16, z);
+      const sc = 170 + Math.random() * 280;
+      s.scale.set(sc, sc * 0.32, 1);
+      s.userData = {
+        drift: 3 + Math.random() * 7, phase: Math.random() * 100,
+        baseY: s.position.y, wrap: D.xMax * 1.15, bob: D.peakY * 0.01,
+      };
+      scene.add(s);
+      cloudSprites.push(s);
+    }
+  }
+
   // ---- dust motes -----------------------------------------------------------------
-  {
+  if (!DEM) {
     const DUST = P.dust?.count ?? 420;
     const dustAlpha = P.dust?.alpha ?? 1.0;
     const dPos = new Float32Array(DUST * 3);
@@ -728,7 +903,7 @@ export function createTerrainScene(id) {
 
   // ---- birds ---------------------------------------------------------------------
   const birds = [];
-  {
+  if (!DEM) {
     const wingGeo = new THREE.BufferGeometry();
     wingGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
       0, 0, -0.16,   0, 0, 0.14,   0.65, 0, -0.05,
@@ -758,7 +933,7 @@ export function createTerrainScene(id) {
 
   // ---- discovery beacons: faint pillars of light on the horizon ---------------------
   const beacons = [];
-  for (const B of P.beacons || []) {
+  for (const B of (DEM ? [] : (P.beacons || []))) {
     const groundY = H(B.x, B.z);
     const group = new THREE.Group();
 
@@ -877,9 +1052,10 @@ export function createTerrainScene(id) {
   function update(t, dt) {
     uniforms.uTime.value = t;
     for (const s of cloudSprites) {
+      const wrap = s.userData.wrap ?? 420;
       s.position.x += s.userData.drift * dt;
-      if (s.position.x > 420) s.position.x = -420;
-      s.position.y = s.userData.baseY + Math.sin(t * 0.1 + s.userData.phase) * 1.6;
+      if (s.position.x > wrap) s.position.x = -wrap;
+      s.position.y = s.userData.baseY + Math.sin(t * 0.1 + s.userData.phase) * (s.userData.bob ?? 1.6);
     }
     for (const b of birds) {
       const u = b.userData;
@@ -897,12 +1073,12 @@ export function createTerrainScene(id) {
     }
   }
 
-  const anchors = {
+  const anchors = DEM ? D.anchors : {
     stand: new THREE.Vector3(P.stand.x, standH + P.stand.eye, P.stand.z),
     lookRest: new THREE.Vector3(P.lookRest[0], standH + P.lookRest[1], P.lookRest[2]),
     entryPos: new THREE.Vector3(P.entryPos[0], standH + P.entryPos[1], P.entryPos[2]),
     entryLook: new THREE.Vector3(P.entryLook[0], standH + P.entryLook[1], P.entryLook[2]),
   };
 
-  return { id, name: P.name, scene, update, anchors, beacons, hasWater: !!P.water };
+  return { id, name: P.name, scene, update, anchors, beacons, hasWater: !!P.water && !DEM, dem: D };
 }

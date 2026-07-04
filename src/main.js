@@ -5,7 +5,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { loadGeo } from './geo.js';
 import { createGlobe } from './globe.js';
-import { createTerrainScene } from './terrain.js';
+import { createTerrainScene, presetHasDem } from './terrain.js';
+import { loadDemGrid } from './dem.js';
 import { createDirector } from './director.js';
 import { createSoundscape } from './audio.js';
 import { createUI } from './ui.js';
@@ -55,12 +56,32 @@ async function boot() {
   // paint stays fast no matter how many locations the atlas grows.
   const IMPLEMENTED = ['trans-ili-alatau', 'big-almaty-lake', 'charyn-canyon'];
   const HOME = IMPLEMENTED[0];
+
+  // Real-geography assets (DEM height grid + satellite drape) for locations
+  // that declare a `dem` preset. Absent files → procedural fallback.
+  const locationAssets = {};
+  async function loadLocationAssets() {
+    const texLoader = new THREE.TextureLoader();
+    for (const id of IMPLEMENTED) {
+      if (!presetHasDem(id)) continue;
+      const demGrid = await loadDemGrid(id);
+      if (!demGrid) continue;
+      const satelliteTex = await new Promise((res) => texLoader.load(
+        `/assets/satellite/${id}.jpg`,
+        (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; res(t); },
+        undefined, () => res(null),
+      ));
+      locationAssets[id] = { demGrid, satelliteTex };
+    }
+  }
+  await loadLocationAssets();
+
   const scenes = {};
   function ensureScene(id) {
     if (!IMPLEMENTED.includes(id)) return null;
     if (!scenes[id]) {
       const t0 = performance.now();
-      scenes[id] = createTerrainScene(id);
+      scenes[id] = createTerrainScene(id, locationAssets[id] || {});
       console.log(`[atlas] built ${id} in ${(performance.now() - t0).toFixed(0)}ms`);
     }
     return scenes[id];
