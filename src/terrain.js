@@ -97,20 +97,19 @@ function heightBigAlmaty(x, z) {
 // Charyn Canyon: a winding red slot canyon carved into flat steppe —
 // the "Valley of Castles" — terraced strata, hoodoo towers, hot dust
 function heightCharyn(x, z) {
-  const plateau = 36 + N.fbm(x * 0.015 + 3, z * 0.015) * 3.5;
-  // winding centerline
-  const cx = 55 * Math.sin(z * 0.012) + 25 * Math.sin(z * 0.004 + 2);
+  const plateau = 36 + N.fbm(x * 0.011 + 3, z * 0.011) * 2.8;
+  const cx = 58 * Math.sin(z * 0.013 + 1.2) + 24 * Math.sin(z * 0.0048 + 2.1);
   const dx = Math.abs(x - cx);
-  const width = 34 + N.noise(z * 0.02, 7.7) * 20;
-  let carve = smoothstep(width + 26, width * 0.3, dx); // 1 in the channel
-  // terraced strata: quantize the wall profile into ledges
-  const STEPS = 6;
+  const width = 18 + N.noise(z * 0.028 + 1.3, 4.1) * 14 + N.ridged(z * 0.008 + 7, x * 0.006) * 7;
+  let carve = smoothstep(width + 24, width * 0.32, dx);
+  const STEPS = 7;
   const qs = carve * STEPS;
-  carve = (Math.floor(qs) + smoothstep(0.35, 0.65, qs - Math.floor(qs))) / STEPS;
-  // hoodoo towers guarding the walls
-  const wallZone = smoothstep(0.08, 0.35, carve) * smoothstep(0.95, 0.55, carve);
-  const towers = Math.pow(N.ridged(x * 0.045 + 13, z * 0.045 + 29), 2.2) * 26 * wallZone;
-  return plateau - carve * 52 + towers;
+  carve = (Math.floor(qs) + smoothstep(0.3, 0.7, qs - Math.floor(qs))) / STEPS;
+  const wallZone = smoothstep(0.08, 0.34, carve) * smoothstep(0.96, 0.58, carve);
+  const strata = Math.floor((N.ridged(x * 0.028 + 9, z * 0.028 + 13) * 0.5 + 0.25) * STEPS) / STEPS;
+  const towers = Math.pow(N.ridged(x * 0.05 + 13, z * 0.05 + 29), 2.2) * 24 * wallZone;
+  const wallLift = smoothstep(0.18, 0.8, 1.0 - carve) * (14 + strata * 18);
+  return plateau - carve * 72 + wallLift + towers;
 }
 
 const PRESETS = {
@@ -180,28 +179,28 @@ const PRESETS = {
   'charyn-canyon': {
     name: 'Charyn Canyon',
     heightFn: heightCharyn,
-    sunDir: [-0.74, 0.21, -0.36],
-    fog: { color: [0.60, 0.42, 0.28], density: 0.00095 },
-    sky: { zenith: [0.15, 0.19, 0.32], horizon: [0.88, 0.50, 0.24], bloom: 0.6, halo: 2.8 },
-    sun: { color: [1.0, 0.55, 0.25], power: 2.6 },
+    sunDir: [-0.72, 0.20, -0.34],
+    fog: { color: [0.62, 0.44, 0.26], density: 0.00099 },
+    sky: { zenith: [0.18, 0.21, 0.28], horizon: [0.90, 0.54, 0.24], bloom: 0.5, halo: 2.6 },
+    sun: { color: [1.0, 0.62, 0.28], power: 2.7 },
     ambient: [0.24, 0.19, 0.15],
     palette: {
-      grassA: [0.14, 0.11, 0.045], grassB: [0.26, 0.20, 0.07], // dry steppe straw
-      rockA: [0.38, 0.185, 0.085], rockB: [0.55, 0.30, 0.14],  // rust & ochre
-      snowLine: 4000, alpenglow: 0.0, bands: 1.0,
+      grassA: [0.15, 0.11, 0.04], grassB: [0.28, 0.20, 0.07], // dry steppe straw
+      rockA: [0.40, 0.16, 0.07], rockB: [0.66, 0.29, 0.11],  // rust & ochre
+      snowLine: 5000, alpenglow: 0.0, bands: 1.0,
     },
-    grass: { count: 6500, minR: 5, maxR: 70, maxH: 60, cz: 10 },
+    grass: { count: 5600, minR: 5, maxR: 72, maxH: 60, cz: 10 },
     flowers: { count: 0, minR: 5, maxR: 10, maxH: 0, cz: 10 },
     spruce: null,
     water: null,
-    clouds: { count: 10, y: [150, 200], zRange: [-180, -400], xSpread: 700, opacity: [0.10, 0.18] },
-    dust: { count: 700, alpha: 1.5 },
-    stand: { x: 62, z: 10, eye: 2.5 },
-    lookRest: [0, -26, -300],
-    entryPos: [-20, 120, 90],
-    entryLook: [10, -34, -80],
-    birds: { height: [60, 95], radius: [60, 110], cz: -110 },
-    beacons: [{ to: 'big-almaty-lake', name: 'Big Almaty Lake', x: 12, z: -175, h: 58 }],
+    clouds: { count: 8, y: [140, 190], zRange: [-180, -430], xSpread: 700, opacity: [0.08, 0.16] },
+    dust: { count: 900, alpha: 2.0 },
+    stand: { x: 58, z: 4, eye: 2.35 },
+    lookRest: [0, -22, -310],
+    entryPos: [-8, 120, 80],
+    entryLook: [2, -28, -90],
+    birds: { height: [70, 105], radius: [65, 120], cz: -122 },
+    beacons: [{ to: 'big-almaty-lake', name: 'Big Almaty Lake', x: 14, z: -180, h: 58 }],
   },
 };
 
