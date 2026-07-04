@@ -28,7 +28,7 @@ async function boot() {
 
   // Home builds at boot; every other destination builds lazily so first
   // paint stays fast no matter how many locations the atlas grows.
-  const IMPLEMENTED = ['trans-ili-alatau', 'big-almaty-lake'];
+  const IMPLEMENTED = ['trans-ili-alatau', 'big-almaty-lake', 'charyn-canyon'];
   const HOME = IMPLEMENTED[0];
   const scenes = {};
   function ensureScene(id) {

@@ -94,6 +94,25 @@ function heightBigAlmaty(x, z) {
   return base + bowl * 3 + slopes + south + lakebed;
 }
 
+// Charyn Canyon: a winding red slot canyon carved into flat steppe —
+// the "Valley of Castles" — terraced strata, hoodoo towers, hot dust
+function heightCharyn(x, z) {
+  const plateau = 36 + N.fbm(x * 0.015 + 3, z * 0.015) * 3.5;
+  // winding centerline
+  const cx = 55 * Math.sin(z * 0.012) + 25 * Math.sin(z * 0.004 + 2);
+  const dx = Math.abs(x - cx);
+  const width = 34 + N.noise(z * 0.02, 7.7) * 20;
+  let carve = smoothstep(width + 26, width * 0.3, dx); // 1 in the channel
+  // terraced strata: quantize the wall profile into ledges
+  const STEPS = 6;
+  const qs = carve * STEPS;
+  carve = (Math.floor(qs) + smoothstep(0.35, 0.65, qs - Math.floor(qs))) / STEPS;
+  // hoodoo towers guarding the walls
+  const wallZone = smoothstep(0.08, 0.35, carve) * smoothstep(0.95, 0.55, carve);
+  const towers = Math.pow(N.ridged(x * 0.045 + 13, z * 0.045 + 29), 2.2) * 26 * wallZone;
+  return plateau - carve * 52 + towers;
+}
+
 const PRESETS = {
   'trans-ili-alatau': {
     name: 'Trans-Ili Alatau',
@@ -152,7 +171,37 @@ const PRESETS = {
     entryPos: [0, 130, 80],
     entryLook: [0, 0, -95],
     birds: { height: [22, 40], radius: [30, 60], cz: -95 },
-    beacons: [{ to: 'trans-ili-alatau', name: 'Trans-Ili Alatau', x: 38, z: -160, h: 58 }],
+    beacons: [
+      { to: 'trans-ili-alatau', name: 'Trans-Ili Alatau', x: 38, z: -160, h: 58 },
+      { to: 'charyn-canyon', name: 'Charyn Canyon', x: -52, z: -150, h: 58 },
+    ],
+  },
+
+  'charyn-canyon': {
+    name: 'Charyn Canyon',
+    heightFn: heightCharyn,
+    sunDir: [-0.74, 0.21, -0.36],
+    fog: { color: [0.60, 0.42, 0.28], density: 0.00095 },
+    sky: { zenith: [0.15, 0.19, 0.32], horizon: [0.88, 0.50, 0.24], bloom: 0.6, halo: 2.8 },
+    sun: { color: [1.0, 0.55, 0.25], power: 2.6 },
+    ambient: [0.24, 0.19, 0.15],
+    palette: {
+      grassA: [0.14, 0.11, 0.045], grassB: [0.26, 0.20, 0.07], // dry steppe straw
+      rockA: [0.38, 0.185, 0.085], rockB: [0.55, 0.30, 0.14],  // rust & ochre
+      snowLine: 4000, alpenglow: 0.0, bands: 1.0,
+    },
+    grass: { count: 6500, minR: 5, maxR: 70, maxH: 60, cz: 10 },
+    flowers: { count: 0, minR: 5, maxR: 10, maxH: 0, cz: 10 },
+    spruce: null,
+    water: null,
+    clouds: { count: 10, y: [150, 200], zRange: [-180, -400], xSpread: 700, opacity: [0.10, 0.18] },
+    dust: { count: 700, alpha: 1.5 },
+    stand: { x: 62, z: 10, eye: 2.5 },
+    lookRest: [0, -26, -300],
+    entryPos: [-20, 120, 90],
+    entryLook: [10, -34, -80],
+    birds: { height: [60, 95], radius: [60, 110], cz: -110 },
+    beacons: [{ to: 'big-almaty-lake', name: 'Big Almaty Lake', x: 12, z: -175, h: 58 }],
   },
 };
 
@@ -180,6 +229,7 @@ export function createTerrainScene(id) {
     uRockB: { value: new THREE.Color(...P.palette.rockB) },
     uSnowLine: { value: P.palette.snowLine },
     uAlpenglow: { value: P.palette.alpenglow },
+    uBands: { value: P.palette.bands || 0 },
   };
 
   // ---- sky dome -------------------------------------------------------------
@@ -239,7 +289,7 @@ export function createTerrainScene(id) {
     fragmentShader: /* glsl */ `
       uniform vec3 uSunDir, uSunCol, uAmbient, uFogColor;
       uniform vec3 uGrassA, uGrassB, uRockA, uRockB;
-      uniform float uTime, uFogDensity, uSnowLine, uAlpenglow;
+      uniform float uTime, uFogDensity, uSnowLine, uAlpenglow, uBands;
       varying vec3 vNormal;
       varying vec3 vWorld;
       ${NOISE_GLSL}
@@ -264,6 +314,13 @@ export function createTerrainScene(id) {
 
         vec3 grass = mix(uGrassA, uGrassB, detail);
         vec3 rock  = mix(uRockA, uRockB, detail);
+        // sedimentary strata: each elevation layer gets its own tint
+        if (uBands > 0.0) {
+          float layer = floor(h * 0.45 + fbm(vWorld.xz * 0.02) * 1.2);
+          float lr = hash21(vec2(layer, 7.0));
+          vec3 band = mix(uRockA * 0.75, uRockB * 1.15, lr);
+          rock = mix(rock, band, uBands * 0.85);
+        }
         vec3 snow  = vec3(0.93, 0.95, 1.0);
 
         float snowLine = uSnowLine + detail * 24.0;
@@ -622,7 +679,8 @@ export function createTerrainScene(id) {
 
   // ---- dust motes -----------------------------------------------------------------
   {
-    const DUST = 420;
+    const DUST = P.dust?.count ?? 420;
+    const dustAlpha = P.dust?.alpha ?? 1.0;
     const dPos = new Float32Array(DUST * 3);
     const dPhase = new Float32Array(DUST);
     for (let i = 0; i < DUST; i++) {
@@ -635,7 +693,7 @@ export function createTerrainScene(id) {
     dGeo.setAttribute('position', new THREE.BufferAttribute(dPos, 3));
     dGeo.setAttribute('aPhase', new THREE.BufferAttribute(dPhase, 1));
     const dustMat = new THREE.ShaderMaterial({
-      uniforms,
+      uniforms: { ...uniforms, uDustAlpha: { value: dustAlpha } },
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -656,10 +714,11 @@ export function createTerrainScene(id) {
         }
       `,
       fragmentShader: /* glsl */ `
+        uniform float uDustAlpha;
         varying float vSpark;
         void main() {
           float d = smoothstep(0.5, 0.0, length(gl_PointCoord - 0.5));
-          gl_FragColor = vec4(vec3(1.0, 0.85, 0.6), d * (0.08 + vSpark * 0.5));
+          gl_FragColor = vec4(vec3(1.0, 0.85, 0.6), d * (0.08 + vSpark * 0.5) * uDustAlpha);
         }
       `,
     });
