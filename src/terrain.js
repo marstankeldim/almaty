@@ -97,19 +97,19 @@ function heightBigAlmaty(x, z) {
 // Charyn Canyon: a winding red slot canyon carved into flat steppe —
 // the "Valley of Castles" — terraced strata, hoodoo towers, hot dust
 function heightCharyn(x, z) {
-  const plateau = 36 + N.fbm(x * 0.011 + 3, z * 0.011) * 2.8;
-  const cx = 58 * Math.sin(z * 0.013 + 1.2) + 24 * Math.sin(z * 0.0048 + 2.1);
+  const plateau = 30 + N.fbm(x * 0.009 + 3, z * 0.009) * 2.1;
+  const cx = 58 * Math.sin(z * 0.013 + 1.2) + 22 * Math.sin(z * 0.0048 + 2.1);
   const dx = Math.abs(x - cx);
-  const width = 18 + N.noise(z * 0.028 + 1.3, 4.1) * 14 + N.ridged(z * 0.008 + 7, x * 0.006) * 7;
-  let carve = smoothstep(width + 24, width * 0.32, dx);
+  const width = 11 + N.noise(z * 0.032 + 1.3, 4.1) * 10 + N.ridged(z * 0.008 + 7, x * 0.006) * 6;
+  let carve = smoothstep(width + 24, width * 0.26, dx);
   const STEPS = 7;
   const qs = carve * STEPS;
   carve = (Math.floor(qs) + smoothstep(0.3, 0.7, qs - Math.floor(qs))) / STEPS;
   const wallZone = smoothstep(0.08, 0.34, carve) * smoothstep(0.96, 0.58, carve);
   const strata = Math.floor((N.ridged(x * 0.028 + 9, z * 0.028 + 13) * 0.5 + 0.25) * STEPS) / STEPS;
-  const towers = Math.pow(N.ridged(x * 0.05 + 13, z * 0.05 + 29), 2.2) * 24 * wallZone;
-  const wallLift = smoothstep(0.18, 0.8, 1.0 - carve) * (14 + strata * 18);
-  return plateau - carve * 72 + wallLift + towers;
+  const towers = Math.pow(N.ridged(x * 0.05 + 13, z * 0.05 + 29), 2.2) * 26 * wallZone;
+  const wallLift = smoothstep(0.16, 0.82, 1.0 - carve) * (18 + strata * 20);
+  return plateau - carve * 92 + wallLift + towers;
 }
 
 const PRESETS = {
@@ -195,10 +195,10 @@ const PRESETS = {
     water: null,
     clouds: { count: 8, y: [140, 190], zRange: [-180, -430], xSpread: 700, opacity: [0.08, 0.16] },
     dust: { count: 900, alpha: 2.0 },
-    stand: { x: 58, z: 4, eye: 2.35 },
-    lookRest: [0, -22, -310],
-    entryPos: [-8, 120, 80],
-    entryLook: [2, -28, -90],
+    stand: { x: 56, z: 4, eye: 2.45 },
+    lookRest: [0, -24, -320],
+    entryPos: [-10, 120, 82],
+    entryLook: [2, -30, -92],
     birds: { height: [70, 105], radius: [65, 120], cz: -122 },
     beacons: [{ to: 'big-almaty-lake', name: 'Big Almaty Lake', x: 14, z: -180, h: 58 }],
   },
