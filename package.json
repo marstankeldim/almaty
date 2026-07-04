@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:assets": "node scripts/test-assets.mjs",
-    "postinstall": "mkdir -p public/basis && cp -R node_modules/three/examples/jsm/libs/basis/* public/basis/ || true"
+    "postinstall": "node scripts/copy-basis.mjs"
   },
   "dependencies": {
     "three": "^0.166.1",

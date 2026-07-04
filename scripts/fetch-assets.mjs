@@ -365,5 +365,8 @@ This repository includes assets sourced from public or CC-licensed providers.
 
 run().catch((error) => {
   console.error(`[assets] failed: ${error.message}`);
+  if (error && error.stack) {
+    console.error(error.stack);
+  }
   process.exitCode = 1;
 });
