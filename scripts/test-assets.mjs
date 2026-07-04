@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import sharp from 'sharp';
 import { decodeTerrarium } from '../src/terrarium.js';
 
 function assert(cond, msg) {
@@ -35,6 +37,12 @@ for (let i = 0; i < width * height; i++) {
   const p = i * 4;
   rgba[p] = R; rgba[p+1] = G; rgba[p+2] = B; rgba[p+3] = A;
 }
+
+// Ensure test fixture PNG exists by writing it using sharp (raw RGBA input)
+const outDir = path.resolve(fileURLToPath(new URL('../public/test-fixtures/', import.meta.url)));
+try { fs.mkdirSync(outDir, { recursive: true }); } catch (e) {}
+const pngPath = path.join(outDir, 'terrarium-4x4.png');
+await sharp(Buffer.from(rgba), { raw: { width, height, channels: 4 } }).png().toFile(pngPath);
 
 const decoded = decodeTerrarium(rgba, width, height);
 
