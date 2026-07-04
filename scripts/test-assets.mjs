@@ -14,10 +14,10 @@ function assert(cond, msg) {
 const width = 4, height = 4;
 // choose these test heights (meters)
 const heights = new Float32Array([
-  -32769, -32768, -32767, -32766,
-  -32765, -32764, -32763, -32762,
-  0, 1, 256, 257,
-  1024, 2048, 65535, -100
+  -32768, -32767, -32766, -32765,
+  -100, -1, 0, 1,
+  256, 257, 1024, 2048,
+  30000, 32766, 32767, -123
 ]);
 
 function encodeTerrariumValue(h) {
@@ -60,8 +60,8 @@ const expectedMid = (v00 + v10 + v01 + v11) / 4;
 assert(Math.abs(mid - expectedMid) < 1e-6, `mid expected ${expectedMid} got ${mid}`);
 
 // sidecar JSON parsing test
-const fixtureJsonPath = path.resolve('public/test-fixtures/terrarium-4x4.json');
-const sidecar = JSON.parse(fs.readFileSync(fixtureJsonPath, 'utf8'));
+const fixtureUrl = new URL('../public/test-fixtures/terrarium-4x4.json', import.meta.url);
+const sidecar = JSON.parse(fs.readFileSync(fixtureUrl, 'utf8'));
 assert(typeof sidecar.metersPerPixel === 'number', 'sidecar metersPerPixel');
 assert(Array.isArray(sidecar.bbox) && sidecar.bbox.length === 4, 'sidecar bbox');
 

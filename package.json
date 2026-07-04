@@ -7,13 +7,15 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:assets": "node scripts/test-assets.mjs"
+    "test:assets": "node scripts/test-assets.mjs",
+    "postinstall": "mkdir -p public/basis && cp -R node_modules/three/examples/jsm/libs/basis/* public/basis/ || true"
   },
   "dependencies": {
     "three": "^0.166.1",
     "topojson-client": "^3.1.0"
   },
   "devDependencies": {
+    "sharp": "^0.35.3",
     "vite": "^5.4.0"
   }
 }

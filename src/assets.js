@@ -50,8 +50,18 @@ export async function loadHdriEnvironment(renderer, path) {
 export function loadColorTexture(path, renderer) {
   // sRGB, mipmap, anisotropy 8
   if (path.endsWith('.ktx2')) {
-    // TODO: implement KTX2 path using KTX2Loader + basis transcoder in public/basis/
-    throw new Error('KTX2 not implemented in this scaffold');
+    if (!renderer) throw new Error('KTX2 loading requires a WebGL renderer instance for feature detection');
+    const { KTX2Loader } = await import('three/examples/jsm/loaders/KTX2Loader.js');
+    const THREE = await import('three');
+    const ktx2 = new KTX2Loader();
+    // runtime expects the Basis transcoder files to be served from /basis/
+    ktx2.setTranscoderPath('/basis/');
+    ktx2.detectSupport(renderer);
+    const tex = await new Promise((res, rej) => ktx2.load(path, res, undefined, rej));
+    tex.colorSpace = 'SRGBColorSpace';
+    tex.generateMipmaps = true;
+    tex.anisotropy = 8;
+    return tex;
   }
   // Lazy import three to avoid Node resolution at module load
   const THREE = require('three');
@@ -65,7 +75,8 @@ export function loadColorTexture(path, renderer) {
 
 export function loadDataTexture(path) {
   if (path.endsWith('.ktx2')) {
-    throw new Error('KTX2 not implemented in this scaffold');
+    // For KTX2 data textures we still require renderer for support detection
+    throw new Error('KTX2 data textures must be loaded via the async KTX2 path; call loadColorTexture/loadDataTexture with a renderer (browser-only)');
   }
   const THREE = require('three');
   const loader = new THREE.TextureLoader();

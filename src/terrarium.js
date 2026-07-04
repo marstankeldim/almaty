@@ -33,13 +33,13 @@ export function decodeTerrarium(rgbaBytes, width, height) {
     const i01 = y1 * width + x0;
     const i11 = y1 * width + x1;
 
-    const v00 = grid[i00];
-    const v10 = grid[i10];
-    const v01 = grid[i01];
-    const v11 = grid[i11];
+    const n00 = grid[i00];
+    const n10 = grid[i10];
+    const n01 = grid[i01];
+    const n11 = grid[i11];
 
-    const a = v00 * (1 - sx) + v10 * sx;
-    const b = v01 * (1 - sx) + v11 * sx;
+    const a = n00 * (1 - sx) + n10 * sx;
+    const b = n01 * (1 - sx) + n11 * sx;
     return a * (1 - sy) + b * sy;
   }
 

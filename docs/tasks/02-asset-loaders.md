@@ -49,6 +49,30 @@ export async function loadPbrSet(name)   // → { albedo, normal, roughness } us
 - `decodeTerrarium` is pure (no DOM/three imports at module top-level that break Node — keep three imports inside browser-only functions or make the decode a separate tiny module `src/terrarium.js` if cleaner).
 - No existing file behavior changes; nothing imports the new module yet.
 
+## KTX2 readiness and transcoder placement
+
+Notes for KTX2 support (forward provisioning):
+
+- `loadColorTexture` and `loadDataTexture` should detect `.ktx2` files and route
+   them through `KTX2Loader` from `three/examples/jsm/loaders/KTX2Loader.js`.
+- The Basis Universal transcoder files must be served to the browser. Place the
+   contents of `node_modules/three/examples/jsm/libs/basis/` into `public/basis/`
+   so they are available at runtime under `/basis/`.
+- You can copy these files automatically after `npm install` with a simple
+   `postinstall` script (already added to `package.json`):
+
+```json
+"postinstall": "mkdir -p public/basis && cp -R node_modules/three/examples/jsm/libs/basis/* public/basis/ || true"
+```
+
+- At runtime the loader should call `ktx2.setTranscoderPath('/basis/')` and
+   `ktx2.detectSupport(renderer)` before loading. This requires passing the
+   WebGL renderer instance into the KTX2 loading call.
+
+- Implementations should keep all `three` and `KTX2Loader` imports inside
+   browser-only functions (lazy import) to avoid breaking Node-based tests.
+
+
 ---
 
 ## Review round 1 (Claude, 2026-07-04)

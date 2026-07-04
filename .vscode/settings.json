@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /Users/ayan/Documents/cmpsc/almaty && python3 - <<'PY'\nimport urllib\\.request, urllib\\.parse\nfor u in \\[\n'https://dl\\.polyhaven\\.org/asset\\.json',\n'https://dl\\.polyhaven\\.org/file/ph-assets/asset\\.json',\n'https://polyhaven\\.com/asset\\.json',\n'https://polyhaven\\.com/assets\\.json'\n\\]:\n    try:\n        req=urllib\\.request\\.Request\\(u,headers=\\{'User-Agent':'Mozilla/5\\.0'\\}\\)\n        with urllib\\.request\\.urlopen\\(req,timeout=20\\) as r:\n            body=r\\.read\\(600\\)\\.decode\\('utf-8','ignore'\\)\n            print\\(u, r\\.status, body\\[:200\\]\\.replace\\('\\\\n',' '\\)\\)\n    except Exception as e:\n        print\\(u, 'ERR', e\\)\nPY$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
