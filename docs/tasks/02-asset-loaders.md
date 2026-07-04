@@ -58,11 +58,14 @@ Notes for KTX2 support (forward provisioning):
 - The Basis Universal transcoder files must be served to the browser. Place the
    contents of `node_modules/three/examples/jsm/libs/basis/` into `public/basis/`
    so they are available at runtime under `/basis/`.
-- You can copy these files automatically after `npm install` with a simple
-   `postinstall` script (already added to `package.json`):
+
+You can copy these files automatically after `npm install` with a simple
+`postinstall` script (already added to `package.json`). We provide a
+cross-platform Node script `scripts/copy-basis.mjs` which is invoked by
+the `postinstall` hook:
 
 ```json
-"postinstall": "mkdir -p public/basis && cp -R node_modules/three/examples/jsm/libs/basis/* public/basis/ || true"
+"postinstall": "node scripts/copy-basis.mjs"
 ```
 
 - At runtime the loader should call `ktx2.setTranscoderPath('/basis/')` and
