@@ -48,3 +48,41 @@ export async function loadPbrSet(name)   // → { albedo, normal, roughness } us
 - `node scripts/test-assets.mjs` passes; `npm run build` passes.
 - `decodeTerrarium` is pure (no DOM/three imports at module top-level that break Node — keep three imports inside browser-only functions or make the decode a separate tiny module `src/terrarium.js` if cleaner).
 - No existing file behavior changes; nothing imports the new module yet.
+
+---
+
+## Review round 1 (Claude, 2026-07-04)
+
+`src/terrarium.js` decode + bilinear sample: **correct** (verified with round-trip
+probes). Test-file fixes seen in the working tree (in-range heights,
+`import.meta.url` fixture path) look right — land them.
+
+**`src/assets.js` must-fix defects before anything imports it:**
+
+1. **`require('three')` in an ESM browser module** (`loadColorTexture`,
+   `loadDataTexture`) — throws `ReferenceError: require is not defined` at
+   runtime. Use a single top-level `import * as THREE from 'three'`; this
+   module is browser-only by design (the pure decode already lives in
+   `terrarium.js` for Node tests).
+2. **Wrong colorSpace values**: `tex.colorSpace = 'SRGBColorSpace'` /
+   `'NoColorSpace'` assign enum *names*, not values (the real strings are
+   `'srgb'` / `''`), silently breaking color management. Use the constants:
+   `THREE.SRGBColorSpace`, `THREE.NoColorSpace`.
+3. **Fixture paths baked into production functions**: `loadDem` and
+   `loadPbrSet` fetch from `/public/test-fixtures/...`. (a) Vite serves
+   `public/` at the web root, so the `/public` prefix 404s even for fixtures;
+   (b) production paths per task 01 are `/assets/dem/<id>.png` + `<id>.json`
+   and `/assets/pbr/<set>/{albedo,normal,roughness}.jpg`. Fixtures belong only
+   in the Node test.
+4. `loadPbrSet` filename scheme (`<name>-albedo.jpg`) diverges from the task-01
+   layout (`<set>/albedo.jpg`). Match task 01.
+5. `src/terrarium.js` type guard references `Buffer`, which is undefined in
+   browsers — a wrong-typed input would throw `ReferenceError` instead of the
+   intended `TypeError`. Guard with `typeof Buffer !== 'undefined' && ...`.
+6. Nits: unused `renderer` param on `loadColorTexture`; prefer
+   `three/addons/loaders/RGBELoader.js` import path; validate sidecar fields
+   (`metersPerPixel`, `bbox`) in `loadDem` and fail loudly.
+
+Acceptance re-check after fixes: `npm run test:assets` (Node), `npm run build`,
+and a browser smoke: `loadColorTexture('/assets/globe/earth-day-8k.jpg')`
+resolves with `.colorSpace === 'srgb'`.
