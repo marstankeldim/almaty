@@ -13,7 +13,7 @@ export function createSoundscape() {
 
   const nodes = {};
   // phase mix targets, eased every frame from the director
-  const mix = { wind: 0.25, rumble: 1.0, pad: 0.0, birds: 0.0, master: 1.0 };
+  const mix = { wind: 0.25, rumble: 1.0, pad: 0.0, birds: 0.0, water: 0.0, master: 1.0 };
 
   function noiseBuffer(seconds = 4) {
     const sr = ctx.sampleRate;
@@ -101,6 +101,20 @@ export function createSoundscape() {
     }
     nodes.padGain = padGain;
     nodes.birdTimer = 0;
+
+    // --- lake water: soft irregular lapping --------------------------------
+    const lapSrc = ctx.createBufferSource();
+    lapSrc.buffer = noiseBuffer(5);
+    lapSrc.loop = true;
+    const lapLp = ctx.createBiquadFilter();
+    lapLp.type = 'lowpass';
+    lapLp.frequency.value = 520;
+    lapLp.Q.value = 0.8;
+    const lapGain = ctx.createGain();
+    lapGain.gain.value = 0;
+    lapSrc.connect(lapLp).connect(lapGain).connect(master);
+    lapSrc.start();
+    nodes.lapGain = lapGain;
   }
 
   function chirp() {
@@ -143,6 +157,11 @@ export function createSoundscape() {
     nodes.rumbleGain.gain.value = (lub + dub) * 0.11 * mix.rumble;
 
     nodes.padGain.gain.value += (mix.pad * 0.16 - nodes.padGain.gain.value) * k * 0.5;
+
+    // lapping: two beat frequencies make it irregular, like a real shore
+    const lapWave = Math.max(0,
+      (0.5 + 0.5 * Math.sin(time * 0.9)) * (0.55 + 0.45 * Math.sin(time * 3.1 + 0.7)));
+    nodes.lapGain.gain.value += (mix.water * 0.09 * lapWave - nodes.lapGain.gain.value) * k * 2.0;
 
     if (mix.birds > 0.05) {
       nodes.birdTimer -= dt;

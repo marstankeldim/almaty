@@ -1,10 +1,15 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { loadGeo } from './geo.js';
 import { createGlobe } from './globe.js';
 import { createTerrainScene } from './terrain.js';
 import { createDirector } from './director.js';
 import { createSoundscape } from './audio.js';
 import { createUI } from './ui.js';
+import { discover } from './locations.js';
 
 async function boot() {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -20,10 +25,48 @@ async function boot() {
 
   const geo = await loadGeo();
   const globe = createGlobe(geo);
-  const terrain = createTerrainScene();
-  const director = createDirector({ camera, globe, terrain });
+
+  // Home builds at boot; every other destination builds lazily so first
+  // paint stays fast no matter how many locations the atlas grows.
+  const IMPLEMENTED = ['trans-ili-alatau', 'big-almaty-lake'];
+  const HOME = IMPLEMENTED[0];
+  const scenes = {};
+  function ensureScene(id) {
+    if (!IMPLEMENTED.includes(id)) return null;
+    if (!scenes[id]) {
+      const t0 = performance.now();
+      scenes[id] = createTerrainScene(id);
+      console.log(`[atlas] built ${id} in ${(performance.now() - t0).toFixed(0)}ms`);
+    }
+    return scenes[id];
+  }
+  ensureScene(HOME);
+  // pre-build the rest while the globe intro plays
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 3000));
+  idle(() => IMPLEMENTED.forEach(ensureScene));
+
   const sound = createSoundscape();
-  const ui = createUI(geo);
+  let ui;
+  const director = createDirector({
+    camera, globe, scenes, ensureScene,
+    onArrive: (id) => {
+      discover(id);
+      ui.setRegion(scenes[id].name);
+    },
+  });
+  ui = createUI(geo, {
+    implemented: new Set(IMPLEMENTED),
+    onTravel: (id) => director.travelTo(id),
+  });
+
+  // post: gentle HDR bloom — the awakening, the sunrise, the city lights
+  const composer = new EffectComposer(renderer);
+  const renderPass = new RenderPass(globe.scene, camera);
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.65, 0.85);
+  composer.addPass(renderPass);
+  composer.addPass(bloomPass);
+  composer.addPass(new OutputPass());
 
   // ---- whiteout: the pass through the clouds --------------------------------
   const overlayScene = new THREE.Scene();
@@ -73,17 +116,51 @@ async function boot() {
   overlayScene.add(overlay);
 
   // ---- input -------------------------------------------------------------------
-  window.addEventListener('pointerdown', () => sound.start(), { once: false });
+  const raycaster = new THREE.Raycaster();
+  const pointer = new THREE.Vector2();
+  function beaconAt(e) {
+    const p = director.params;
+    if (p.scene === 'globe' || !p.settled || director.traveling) return null;
+    pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(pointer, camera);
+    for (const b of scenes[p.scene].beacons) {
+      if (raycaster.intersectObject(b.hit, false).length) return b;
+    }
+    return null;
+  }
+  window.addEventListener('pointermove', (e) => {
+    const b = beaconAt(e);
+    document.body.style.cursor = b ? 'pointer' : 'default';
+    ui.showBeaconTip(b, e.clientX, e.clientY);
+  });
+  window.addEventListener('pointerdown', (e) => {
+    sound.start();
+    const b = beaconAt(e);
+    if (b) {
+      ui.showBeaconTip(null);
+      director.travelTo(b.to);
+    }
+  });
   window.addEventListener('dblclick', () => director.skip());
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
   });
 
   // ---- loop ----------------------------------------------------------------------
   const clock = new THREE.Clock();
   let wall = 0;
+  const stats = { ema: 16, fps: 60, pixelRatio: renderer.getPixelRatio(), frames: 0 };
+
+  function setPixelRatio(pr) {
+    stats.pixelRatio = pr;
+    renderer.setPixelRatio(pr);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+  }
+
   function frame(dt) {
     wall += dt;
 
@@ -96,6 +173,7 @@ async function boot() {
     sound.mix.rumble = p.audio.rumble;
     sound.mix.pad = p.audio.pad;
     sound.mix.birds = p.audio.birds;
+    sound.mix.water = p.audio.water;
     sound.update(dt, wall);
 
     ui.apply(p, sound.started, director.elapsed);
@@ -103,20 +181,63 @@ async function boot() {
     renderer.clear();
     if (p.scene === 'globe') {
       globe.update(wall, p);
-      renderer.render(globe.scene, camera);
+      renderPass.scene = globe.scene;
     } else {
-      terrain.update(wall, dt);
-      renderer.render(terrain.scene, camera);
+      const s = scenes[p.scene];
+      s.update(wall, dt);
+      renderPass.scene = s.scene;
     }
+    bloomPass.strength = p.bloom;
+    composer.render();
     if (p.whiteout > 0.002) {
       renderer.clearDepth();
       renderer.render(overlayScene, overlayCam);
     }
   }
-  renderer.setAnimationLoop(() => frame(Math.min(clock.getDelta(), 0.1)));
+
+  // adaptive quality: judge only real rAF cadence, never manual test steps
+  let lastRaf = 0;
+  renderer.setAnimationLoop(() => {
+    const now = performance.now();
+    if (lastRaf && document.visibilityState === 'visible') {
+      const ms = now - lastRaf;
+      if (ms < 250) { // ignore tab-switch stalls
+        stats.ema = stats.ema * 0.95 + ms * 0.05;
+        stats.fps = 1000 / stats.ema;
+        if (++stats.frames % 120 === 0) {
+          const maxPr = Math.min(window.devicePixelRatio, 2);
+          if (stats.ema > 22 && stats.pixelRatio > 1.0) {
+            setPixelRatio(Math.max(1.0, stats.pixelRatio - 0.25));
+          } else if (stats.ema < 13 && stats.pixelRatio < maxPr) {
+            setPixelRatio(Math.min(maxPr, stats.pixelRatio + 0.25));
+          }
+        }
+      }
+    }
+    lastRaf = now;
+    frame(Math.min(clock.getDelta(), 0.1));
+  });
 
   // manual stepping for automated visual checks (rAF pauses in hidden tabs)
-  window.__atlas = { director, step: (dt = 1 / 30) => frame(dt) };
+  window.__atlas = {
+    director,
+    stats,
+    step: (dt = 1 / 30) => frame(dt),
+    travelTo: (id) => director.travelTo(id),
+    // screen-space position of the active scene's first beacon (for tests)
+    beaconScreen() {
+      const p = director.params;
+      if (p.scene === 'globe') return null;
+      const b = scenes[p.scene].beacons[0];
+      if (!b) return null;
+      const v = b.hit.position.clone().project(camera);
+      return {
+        x: (v.x * 0.5 + 0.5) * window.innerWidth,
+        y: (-v.y * 0.5 + 0.5) * window.innerHeight,
+        inFront: v.z < 1,
+      };
+    },
+  };
 }
 
 boot();

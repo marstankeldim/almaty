@@ -110,8 +110,8 @@ export function createGlobe(geo) {
 
         // isolation: the rest of the world sinks into darkness
         float keep = mix(1.0, kz, uIsolate);
-        col *= mix(1.0, 0.06, uIsolate * (1.0 - kz));
-        cityGlow *= mix(1.0, kz * 1.2 + 0.02, uIsolate);
+        col *= mix(1.0, 0.008, uIsolate * (1.0 - kz));
+        cityGlow *= mix(1.0, kz * 1.2 + 0.003, uIsolate);
         col += cityGlow;
 
         // ---- Kazakhstan awakens ------------------------------------------
@@ -129,14 +129,14 @@ export function createGlobe(geo) {
                              vec3(0.95, 0.80, 0.50),   // ranges catching light
                              smoothstep(0.35, 0.75, terrain));
           float pulse = 0.85 + 0.15 * sin(uTime * 1.7 + dist * 30.0);
-          col += kz * spread * (terrCol * 0.55 + vec3(1.0, 0.85, 0.5) * veins * 0.35) * pulse;
+          col += kz * spread * (terrCol * 0.34 + vec3(1.0, 0.85, 0.5) * veins * 0.22) * pulse;
 
           // border: soft light bleeding at the mask's edge
           float e = 0.0015;
           float gx = texture2D(uMask, uv + vec2(e, 0.0)).g - texture2D(uMask, uv - vec2(e, 0.0)).g;
           float gy = texture2D(uMask, uv + vec2(0.0, e)).g - texture2D(uMask, uv - vec2(0.0, e)).g;
           float edge = clamp(length(vec2(gx, gy)) * 1.6, 0.0, 1.0);
-          col += vec3(1.0, 0.83, 0.5) * edge * spread * 1.4 * pulse;
+          col += vec3(1.0, 0.83, 0.5) * edge * spread * 0.8 * pulse;
         }
 
         col *= keep * 0.5 + 0.5; // never fully crush lit KZ pixels

@@ -3,7 +3,7 @@ import { LOCATIONS, loadDiscovered } from './locations.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-export function createUI(geo) {
+export function createUI(geo, { implemented = new Set(), onTravel = () => {} } = {}) {
   const title = document.getElementById('title');
   const hud = document.getElementById('hud');
   const atlasEl = document.getElementById('atlas');
@@ -109,9 +109,18 @@ export function createUI(geo) {
         dot.setAttribute('class', 'seed');
       }
       g.appendChild(dot);
-      g.style.cursor = 'pointer';
+      const canGo = implemented.has(loc.id);
+      g.style.cursor = canGo ? 'pointer' : 'default';
+      if (canGo) {
+        g.addEventListener('click', () => {
+          atlasEl.classList.remove('visible');
+          tip.style.opacity = '0';
+          onTravel(loc.id);
+        });
+      }
       g.addEventListener('pointerenter', (e) => {
-        tip.textContent = found ? loc.name : 'Undiscovered';
+        tip.textContent = found ? loc.name
+          : canGo ? 'A faint light... journey there?' : 'Undiscovered';
         tip.style.opacity = '1';
         tip.style.left = `${e.clientX + 16}px`;
         tip.style.top = `${e.clientY - 12}px`;
@@ -144,6 +153,17 @@ export function createUI(geo) {
       title.classList.toggle('visible', params.title);
       hud.classList.toggle('visible', params.ui && !atlasEl.classList.contains('visible'));
       soundHint.classList.toggle('visible', !audioStarted && elapsed > 4);
+    },
+    setRegion(name) {
+      document.getElementById('hud-region').textContent = name;
+    },
+    /** Mystical hover label for in-scene discovery beacons. */
+    showBeaconTip(beacon, x, y) {
+      if (!beacon) { tip.style.opacity = '0'; return; }
+      tip.textContent = `${beacon.name} — journey there`;
+      tip.style.opacity = '1';
+      tip.style.left = `${x + 18}px`;
+      tip.style.top = `${y - 14}px`;
     },
   };
 }
