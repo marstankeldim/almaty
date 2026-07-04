@@ -24,7 +24,32 @@ async function boot() {
   camera.position.set(0, 0, 1.9);
 
   const geo = await loadGeo();
-  const globe = createGlobe(geo);
+
+  // Real-Earth textures (NASA); missing assets fall back to the procedural globe.
+  async function loadEarthTextures() {
+    const loader = new THREE.TextureLoader();
+    const load = (path, srgb) => new Promise((res, rej) => {
+      loader.load(path, (t) => {
+        t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+        t.wrapS = THREE.RepeatWrapping;
+        t.anisotropy = 8;
+        res(t);
+      }, undefined, rej);
+    });
+    try {
+      const [day, night, clouds] = await Promise.all([
+        load('/assets/globe/earth-day-8k.jpg', true),
+        load('/assets/globe/earth-night-8k.jpg', true),
+        load('/assets/globe/earth-clouds-4k.jpg', false),
+      ]);
+      return { day, night, clouds };
+    } catch {
+      console.warn('[atlas] earth textures missing — run `node scripts/fetch-assets.mjs`; using procedural globe');
+      return null;
+    }
+  }
+  const earthTex = await loadEarthTextures();
+  const globe = createGlobe(geo, earthTex);
 
   // Home builds at boot; every other destination builds lazily so first
   // paint stays fast no matter how many locations the atlas grows.

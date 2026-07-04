@@ -36,10 +36,15 @@ const UV_GLSL = /* glsl */ `
   }
 `;
 
-export function createGlobe(geo) {
+/**
+ * @param tex null for the procedural fallback, or real-Earth textures:
+ *   { day, night, clouds } (NASA Blue Marble / Black Marble / cloud map).
+ */
+export function createGlobe(geo, tex = null) {
   const scene = new THREE.Scene();
   const group = new THREE.Group();
   scene.add(group);
+  const REAL = tex ? { REAL_EARTH: '' } : {};
 
   const maskTex = new THREE.CanvasTexture(geo.canvas);
   maskTex.colorSpace = THREE.NoColorSpace;
@@ -51,6 +56,9 @@ export function createGlobe(geo) {
 
   const uniforms = {
     uMask:     { value: maskTex },
+    uDayTex:   { value: tex?.day ?? null },
+    uNightTex: { value: tex?.night ?? null },
+    uCloudTex: { value: tex?.clouds ?? null },
     uSunDir:   { value: sunDir.clone() },
     uTime:     { value: 0 },
     uIsolate:  { value: 0 },   // 0 = whole world, 1 = only Kazakhstan lit
@@ -62,22 +70,30 @@ export function createGlobe(geo) {
   // ---- surface -------------------------------------------------------------
   const surfMat = new THREE.ShaderMaterial({
     uniforms,
+    defines: REAL,
     vertexShader: /* glsl */ `
       varying vec3 vObjNormal;
       varying vec3 vWorldNormal;
+      varying vec3 vWorldPos;
       void main() {
         vObjNormal = normalize(position);
         vWorldNormal = normalize(mat3(modelMatrix) * normal);
+        vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
     fragmentShader: /* glsl */ `
       uniform sampler2D uMask;
+      #ifdef REAL_EARTH
+      uniform sampler2D uDayTex;
+      uniform sampler2D uNightTex;
+      #endif
       uniform vec3 uSunDir;
       uniform float uTime, uIsolate, uAwaken;
       uniform vec2 uKzSeed;
       varying vec3 vObjNormal;
       varying vec3 vWorldNormal;
+      varying vec3 vWorldPos;
       ${NOISE_GLSL}
       ${UV_GLSL}
 
@@ -88,25 +104,41 @@ export function createGlobe(geo) {
         float kz = mask.g;
         float lights = mask.b;
 
-        float ndl = dot(normalize(vWorldNormal), uSunDir);
+        vec3 n = normalize(vWorldNormal);
+        float ndl = dot(n, uSunDir);
         float day = smoothstep(-0.08, 0.25, ndl);
         float dusk = smoothstep(-0.18, 0.05, ndl) * (1.0 - day);
+        float night = 1.0 - smoothstep(-0.12, 0.12, ndl);
+        vec3 col;
+        vec3 cityGlow;
 
-        // day palette: near-black ocean, muted land
+      #ifdef REAL_EARTH
+        // photographic Earth: Blue Marble albedo under physical-ish sun
+        vec3 albedo = texture2D(uDayTex, uv).rgb;
+        float direct = pow(max(ndl, 0.0), 0.75);
+        vec3 sunTint = mix(vec3(1.0, 0.55, 0.28), vec3(1.0, 0.97, 0.92),
+                           smoothstep(0.0, 0.45, ndl)); // warm rim at the terminator
+        col = albedo * (direct * sunTint * 1.25 + 0.006);
+        // ocean sun glint
+        vec3 view = normalize(cameraPosition - vWorldPos);
+        vec3 refl = reflect(-view, n);
+        float glint = pow(max(dot(refl, uSunDir), 0.0), 90.0);
+        col += (1.0 - land) * vec3(1.0, 0.85, 0.6) * glint * 0.55 * day;
+        // real night lights (Black Marble), warmed; threshold kills airglow haze
+        vec3 marble = max(texture2D(uNightTex, uv).rgb - 0.10, 0.0) * 1.6;
+        cityGlow = marble * vec3(1.15, 0.85, 0.55) * night * 1.5;
+      #else
+        // procedural fallback: near-black ocean, muted land
         vec3 ocean = vec3(0.012, 0.028, 0.055) * (0.25 + 0.75 * day);
-        // faint sun glint on the water
         ocean += vec3(0.10, 0.09, 0.07) * pow(max(ndl, 0.0), 8.0);
         vec3 landCol = mix(vec3(0.075, 0.085, 0.058), vec3(0.21, 0.19, 0.13),
                            fbm(uv * 26.0));
         landCol *= day;
-        landCol += vec3(0.28, 0.12, 0.04) * dusk * 0.6; // terminator warmth
-
-        vec3 col = mix(ocean, landCol, land);
-
-        // night: city lights
-        float night = 1.0 - smoothstep(-0.12, 0.12, ndl);
+        landCol += vec3(0.28, 0.12, 0.04) * dusk * 0.6;
+        col = mix(ocean, landCol, land);
         float flicker = 0.85 + 0.15 * vnoise(uv * 900.0 + uTime * 0.15);
-        vec3 cityGlow = vec3(1.0, 0.72, 0.42) * lights * night * flicker * 1.6;
+        cityGlow = vec3(1.0, 0.72, 0.42) * lights * night * flicker * 1.6;
+      #endif
 
         // isolation: the rest of the world sinks into darkness
         float keep = mix(1.0, kz, uIsolate);
@@ -129,7 +161,13 @@ export function createGlobe(geo) {
                              vec3(0.95, 0.80, 0.50),   // ranges catching light
                              smoothstep(0.35, 0.75, terrain));
           float pulse = 0.85 + 0.15 * sin(uTime * 1.7 + dist * 30.0);
+      #ifdef REAL_EARTH
+          // the land wakes in its own true colors, veined with light
+          vec3 wake = albedo * 1.05 + vec3(1.0, 0.85, 0.5) * veins * 0.20;
+          col += kz * spread * wake * pulse;
+      #else
           col += kz * spread * (terrCol * 0.34 + vec3(1.0, 0.85, 0.5) * veins * 0.22) * pulse;
+      #endif
 
           // border: soft light bleeding at the mask's edge
           float e = 0.0015;
@@ -150,6 +188,7 @@ export function createGlobe(geo) {
   // ---- clouds ---------------------------------------------------------------
   const cloudMat = new THREE.ShaderMaterial({
     uniforms,
+    defines: REAL,
     transparent: true,
     depthWrite: false,
     vertexShader: /* glsl */ `
@@ -168,16 +207,27 @@ export function createGlobe(geo) {
       varying vec3 vWorldNormal;
       ${NOISE_GLSL}
       ${UV_GLSL}
+      #ifdef REAL_EARTH
+      uniform sampler2D uCloudTex;
+      #endif
       void main() {
         vec3 on = normalize(vObjNormal);
         vec2 uv = sphereUv(on);
-        float n = fbm(uv * vec2(9.0, 5.0) + vec2(uTime * 0.004, 0.0));
-        n = smoothstep(0.52 - uCloudBoost * 0.18, 0.78, n);
         float ndl = dot(normalize(vWorldNormal), uSunDir);
         float lit = smoothstep(-0.05, 0.35, ndl);
+        float n;
+      #ifdef REAL_EARTH
+        // real cloud map, drifting imperceptibly; dive boost thickens coverage
+        n = texture2D(uCloudTex, uv + vec2(uTime * 0.00035, 0.0)).r;
+        n = smoothstep(0.08 - uCloudBoost * 0.08, 0.85, n) * (1.0 + uCloudBoost * 0.4);
+        n += fbm(uv * vec2(9.0, 5.0) + vec2(uTime * 0.004, 0.0)) * uCloudBoost * 0.35;
+      #else
+        n = fbm(uv * vec2(9.0, 5.0) + vec2(uTime * 0.004, 0.0));
+        n = smoothstep(0.52 - uCloudBoost * 0.18, 0.78, n);
+      #endif
         vec3 col = vec3(0.9, 0.88, 0.85) * (0.06 + 0.94 * lit);
-        float a = n * (0.13 + 0.5 * lit + uCloudBoost * 0.3);
-        a *= smoothstep(0.97, 0.8, abs(on.y)); // hide equirect pole pinch
+        float a = clamp(n, 0.0, 1.0) * (0.13 + 0.6 * lit + uCloudBoost * 0.3);
+        a *= smoothstep(0.99, 0.85, abs(on.y)); // soften equirect pole pinch
         a *= mix(1.0, 0.06, uIsolate); // clouds recede when the world dims
         gl_FragColor = vec4(col, a);
       }
