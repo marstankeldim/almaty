@@ -2,7 +2,8 @@
 // height_m = (R*256 + G + B/256) - 32768
 
 export function decodeTerrarium(rgbaBytes, width, height) {
-  if (!(rgbaBytes instanceof Uint8Array) && !(rgbaBytes instanceof Buffer)) {
+  const hasBuffer = typeof Buffer !== 'undefined' && typeof Buffer.isBuffer === 'function';
+  if (!(rgbaBytes instanceof Uint8Array) && !(hasBuffer && Buffer.isBuffer(rgbaBytes))) {
     throw new TypeError('rgbaBytes must be Uint8Array or Buffer');
   }
   const pixels = width * height;

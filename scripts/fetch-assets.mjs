@@ -174,7 +174,6 @@ async function stitchTiles(task) {
     mosaic.composite([{ input: tile.buffer, left: (tile.tileX - range.minX) * 256, top: (tile.tileY - range.minY) * 256 }]);
   }
 
-  const mosaicBuffer = await mosaic.toBuffer();
   const xMinPx = Math.floor(lonToMercatorX(bbox[0], zoom));
   const xMaxPx = Math.ceil(lonToMercatorX(bbox[2], zoom));
   const yMaxPx = Math.floor(latToMercatorY(bbox[3], zoom));
@@ -187,14 +186,16 @@ async function stitchTiles(task) {
   const cropWidth = Math.max(1, right - left);
   const cropHeight = Math.max(1, bottom - top);
 
-  const cropped = sharp(mosaicBuffer).extract({ left, top, width: cropWidth, height: cropHeight });
+  await ensureDir(path.dirname(outputFile));
+  const tempPath = `${outputFile}.tmp`;
   if (outputFormat === 'jpg' || outputFormat === 'jpeg') {
-    await cropped.jpeg({ quality: 92 }).toFile(outputFile);
+    await mosaic.extract({ left, top, width: cropWidth, height: cropHeight }).jpeg({ quality: 92 }).toFile(tempPath);
   } else if (outputFormat === 'png') {
-    await cropped.png({ compressionLevel: 9 }).toFile(outputFile);
+    await mosaic.extract({ left, top, width: cropWidth, height: cropHeight }).png({ compressionLevel: 9 }).toFile(tempPath);
   } else {
-    await cropped.toFile(outputFile);
+    await mosaic.extract({ left, top, width: cropWidth, height: cropHeight }).toFile(tempPath);
   }
+  await fs.rename(tempPath, outputFile);
 
   if (title) {
     console.log(`[assets] stitched ${title}`);

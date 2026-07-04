@@ -1,0 +1,329 @@
+{
+  "generatedAt": "2026-07-04T12:32:26.637Z",
+  "files": [
+    {
+      "path": "public/assets/globe/earth-day-8k.jpg",
+      "sourceUrls": [
+        "https://images-assets.nasa.gov/image/PIA18033/PIA18033~orig.jpg"
+      ],
+      "sha256": "1496f1e19fd1ae3c5e2417f28a852c43b15df307e69bc25b3355c464a6600bef",
+      "size": 8947968,
+      "license": "Public domain",
+      "attribution": "NASA Visible Earth / NASA image archive (public domain)."
+    },
+    {
+      "path": "public/assets/globe/earth-night-8k.jpg",
+      "sourceUrls": [
+        "https://images-assets.nasa.gov/image/PIA00422/PIA00422~orig.jpg"
+      ],
+      "sha256": "ca2dc510180bf474bba2389121a9d4f21c07df49f9ec5fe223d1f583ddb8497b",
+      "size": 4603445,
+      "license": "Public domain",
+      "attribution": "NASA Visible Earth / NASA image archive (public domain)."
+    },
+    {
+      "path": "public/assets/globe/earth-clouds-4k.jpg",
+      "sourceUrls": [
+        "https://images-assets.nasa.gov/image/PIA03519/PIA03519~orig.jpg"
+      ],
+      "sha256": "1e27814fb13baf67c4d21f70b211ea2d7e3cb83ecdfe2263fd99a570ee71d01a",
+      "size": 350287,
+      "license": "Public domain",
+      "attribution": "NASA Visible Earth / NASA image archive (public domain)."
+    },
+    {
+      "path": "public/assets/dem/trans-ili-alatau.png",
+      "sourceUrls": [
+        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+      ],
+      "sha256": "095a6e042b72249af846aa348a95c342014b91340663a0632c12609b5e7e8a2b",
+      "size": 8013,
+      "license": "Public domain",
+      "attribution": "AWS Terrain Tiles (public domain / no key required)."
+    },
+    {
+      "path": "public/assets/dem/big-almaty-lake.png",
+      "sourceUrls": [
+        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+      ],
+      "sha256": "2ed706db282594712359c5e47f1f7ee3bbcb15a952cef1306c64aa10bd1db85d",
+      "size": 15124,
+      "license": "Public domain",
+      "attribution": "AWS Terrain Tiles (public domain / no key required)."
+    },
+    {
+      "path": "public/assets/dem/charyn-canyon.png",
+      "sourceUrls": [
+        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+      ],
+      "sha256": "198233668d23911bab647130884b411dc0a746abc2c108fae73714107375d631",
+      "size": 4462,
+      "license": "Public domain",
+      "attribution": "AWS Terrain Tiles (public domain / no key required)."
+    },
+    {
+      "path": "public/assets/satellite/trans-ili-alatau.jpg",
+      "sourceUrls": [
+        "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg"
+      ],
+      "sha256": "baf1e0b25a9b03e7ac9460b5c4caa6037dbb9f42902d20398607e96346768774",
+      "size": 12362,
+      "license": "CC-BY 4.0",
+      "attribution": "EOX Sentinel-2 cloudless mosaic, CC-BY 4.0."
+    },
+    {
+      "path": "public/assets/satellite/big-almaty-lake.jpg",
+      "sourceUrls": [
+        "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg"
+      ],
+      "sha256": "0c4a836ed4a7742b6add4e407bfc6d7a5ede56a0cc443e37ddd23792f6a5c561",
+      "size": 5213,
+      "license": "CC-BY 4.0",
+      "attribution": "EOX Sentinel-2 cloudless mosaic, CC-BY 4.0."
+    },
+    {
+      "path": "public/assets/satellite/charyn-canyon.jpg",
+      "sourceUrls": [
+        "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg"
+      ],
+      "sha256": "b72bdbbe50dc0c81cb09f16eccd4822e36bf702835c51bb722c3394766961bdd",
+      "size": 6945,
+      "license": "CC-BY 4.0",
+      "attribution": "EOX Sentinel-2 cloudless mosaic, CC-BY 4.0."
+    },
+    {
+      "path": "public/assets/hdri/sunrise-mountain-4k.hdr",
+      "sourceUrls": [
+        "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloppenheim_06_4k.hdr"
+      ],
+      "sha256": "0e668c7a13101343d8cff37cdab4b440bb3483a4c8f9e8435df53e12eb843150",
+      "size": 23526002,
+      "license": "CC0",
+      "attribution": "PolyHaven HDRI asset (CC0)."
+    },
+    {
+      "path": "public/assets/hdri/morning-alpine-4k.hdr",
+      "sourceUrls": [
+        "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/forest_slope_4k.hdr"
+      ],
+      "sha256": "112c4035c56e7699637ec798800edaade535cba6f3bfb8b0a602172c4ec30e52",
+      "size": 29764886,
+      "license": "CC0",
+      "attribution": "PolyHaven HDRI asset (CC0)."
+    },
+    {
+      "path": "public/assets/hdri/afternoon-desert-4k.hdr",
+      "sourceUrls": [
+        "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/green_point_park_4k.hdr"
+      ],
+      "sha256": "ce1b1baef8b967152cdbdd3cd90e5cfd3cf4730bd21306a7b0237650ad9fff5c",
+      "size": 25864362,
+      "license": "CC0",
+      "attribution": "PolyHaven HDRI asset (CC0)."
+    },
+    {
+      "path": "public/assets/pbr/cliff-rock/albedo.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "133e30b71ebc7644ef9efe1c76c7155b09e6a171f5693649c66fe55793496487",
+      "size": 6412,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/cliff-rock/normal.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "49379592bb371bfb0be21bbc6280b098862405852994ffb3cc42f6908f8ebae6",
+      "size": 6413,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/cliff-rock/roughness.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "438d65d405783386cdf02c97a8dc88f814788e8d3d4a26247e8d9162b97a385f",
+      "size": 6410,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/scree/albedo.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "0da9cf202801b5e31b8a0864efffe699ece5227e0b52480c8421c766ee4b1c16",
+      "size": 6412,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/scree/normal.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "49379592bb371bfb0be21bbc6280b098862405852994ffb3cc42f6908f8ebae6",
+      "size": 6413,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/scree/roughness.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "4b7d49949c4351c6ddc03efe9cea5f26e910b3efe24c2d0f1338422a85b567c5",
+      "size": 6409,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/alpine-grass/albedo.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "d3f6b3dc7146207ee55e886ed2081c293e55a739ae30a604644ac55c784cee86",
+      "size": 6412,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/alpine-grass/normal.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "49379592bb371bfb0be21bbc6280b098862405852994ffb3cc42f6908f8ebae6",
+      "size": 6413,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/alpine-grass/roughness.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "c1967de03d51931a2fe41ad27cbbe8bbdbef73cf6a2ebf1c73dc2d719a753d83",
+      "size": 6409,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/snow/albedo.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "f367699939d1a5142685ada4f86db78303850152df9dc32b3af3ff90dd6d2f0f",
+      "size": 6412,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/snow/normal.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "49379592bb371bfb0be21bbc6280b098862405852994ffb3cc42f6908f8ebae6",
+      "size": 6413,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/snow/roughness.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "ca31ccbf0e220323f0e4305ccd12b5f75c2ab51472fcb82d137e779b2b6973ce",
+      "size": 6410,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/red-sandstone/albedo.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "26a8fb4e292180766552e28909052f2ec3df53e49fafa1857f7769edbeefc7e8",
+      "size": 6412,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/red-sandstone/normal.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "49379592bb371bfb0be21bbc6280b098862405852994ffb3cc42f6908f8ebae6",
+      "size": 6413,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/red-sandstone/roughness.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "fc770c274a7ef4f27b6752433fd410361112c4fe707c6fb731050d320fba59d9",
+      "size": 6412,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/dry-soil/albedo.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "268a88fc9851683fc916b8abdf8110dced818437f50b565fd696413938c679f2",
+      "size": 6412,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/dry-soil/normal.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "49379592bb371bfb0be21bbc6280b098862405852994ffb3cc42f6908f8ebae6",
+      "size": 6413,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/pbr/dry-soil/roughness.jpg",
+      "sourceUrls": [
+        null
+      ],
+      "sha256": "da8d04085c6f3d3cf0d222327e95c83181c79131b674a30126e872b0c835a130",
+      "size": 6412,
+      "license": "Synthetic fallback",
+      "attribution": "Synthetic fallback generated for local asset pipeline compatibility."
+    },
+    {
+      "path": "public/assets/dem/trans-ili-alatau.json",
+      "sourceUrls": [],
+      "sha256": "623a68457c355f7ab02cc2b384313afd85c52e8d6b7832110570dac6c7b85df9",
+      "size": 297,
+      "license": "Public domain",
+      "attribution": "DEM metadata derived from the requested bounding box and zoom level."
+    },
+    {
+      "path": "public/assets/dem/big-almaty-lake.json",
+      "sourceUrls": [],
+      "sha256": "801924abf91cc2a9d6bb46bb25ef3ceedc5ef8ed6d9f2cd8971184a7dd2f8185",
+      "size": 302,
+      "license": "Public domain",
+      "attribution": "DEM metadata derived from the requested bounding box and zoom level."
+    },
+    {
+      "path": "public/assets/dem/charyn-canyon.json",
+      "sourceUrls": [],
+      "sha256": "0f075b5233533eb5b5c38d76f36b87cbf9c64a8d898b63b1676ea9b21b8d020d",
+      "size": 302,
+      "license": "Public domain",
+      "attribution": "DEM metadata derived from the requested bounding box and zoom level."
+    }
+  ]
+}
