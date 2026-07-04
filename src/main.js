@@ -19,6 +19,8 @@ async function boot() {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0;
   renderer.autoClear = false;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.getElementById('app').appendChild(renderer.domElement);
 
   const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.01, 50);
@@ -81,7 +83,7 @@ async function boot() {
     if (!IMPLEMENTED.includes(id)) return null;
     if (!scenes[id]) {
       const t0 = performance.now();
-      scenes[id] = createTerrainScene(id, locationAssets[id] || {});
+      scenes[id] = createTerrainScene(id, { ...(locationAssets[id] || {}), camera });
       console.log(`[atlas] built ${id} in ${(performance.now() - t0).toFixed(0)}ms`);
     }
     return scenes[id];
@@ -231,6 +233,15 @@ async function boot() {
     } else {
       const s = scenes[p.scene];
       s.update(wall, dt);
+      if (s.csm) {
+        // recompute cascade frusta when the camera's projection changes
+        if (s._csmFov !== camera.fov || s._csmAspect !== camera.aspect) {
+          s.csm.updateFrustums();
+          s._csmFov = camera.fov; s._csmAspect = camera.aspect;
+        }
+        s.csm.update();
+        s.csm.updateUniforms();
+      }
       renderPass.scene = s.scene;
     }
     bloomPass.strength = p.bloom;

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CSM } from 'three/addons/csm/CSM.js';
 
 // ---------------------------------------------------------------------------
 // Deterministic 2D value noise (CPU) — heightfields & placement
@@ -201,7 +202,11 @@ const PRESETS = {
       heightFrac: 0.82,       // hover at 82% of summit height
       viewDistFrac: 0.34,     // this far north of the summit
       fogColor: [0.62, 0.55, 0.52],
-      fogDensity: 0.00034,
+      fogDensity: 0.00034,    // (procedural-path fallback)
+      fogExp2: 0.00024,       // MeshStandard FogExp2 for the lit DEM
+      sunIntensity: 3.1,
+      hemi: 1.15,
+      shadowFar: 2400,
       segX: 700, segZ: 466,
     },
   },
@@ -338,6 +343,7 @@ export function createTerrainScene(id, assets = {}) {
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 20), skyMat));
 
   // ---- real-DEM terrain (satellite-draped) ------------------------------------
+  let csm = null;
   if (DEM) {
     const geomW = D.xMax - D.xMin, geomD = D.zBack - D.zFront;
     const cx = (D.xMax + D.xMin) / 2, cz = (D.zBack + D.zFront) / 2;
@@ -353,62 +359,88 @@ export function createTerrainScene(id, assets = {}) {
       uvA.setXY(i, u, 1 - v); // texture row 0 is south (flipY); DEM v=0 is north
     }
     g.computeVertexNormals();
-    const demMat = new THREE.ShaderMaterial({
-      uniforms: { ...uniforms, uSat: { value: assets.satelliteTex ?? null } },
-      vertexShader: /* glsl */ `
-        varying vec3 vNormal; varying vec3 vWorld; varying vec2 vUv;
-        void main() {
-          vNormal = normal; vWorld = position; vUv = uv;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        uniform sampler2D uSat;
-        uniform vec3 uSunDir, uSunCol, uAmbient, uFogColor;
-        uniform float uTime, uFogDensity;
-        varying vec3 vNormal; varying vec3 vWorld; varying vec2 vUv;
-        ${NOISE_GLSL}
-        void main() {
-          vec3 n = normalize(vNormal);
-          float dist = length(vWorld - cameraPosition);
 
-          // near-field detail normal — hides the coarse DEM tessellation
-          float be = 1.1, bs = 0.05;
-          float bump = exp(-dist * 0.004) * 1.5;
-          float hL = fbm((vWorld.xz - vec2(be, 0.0)) * bs);
-          float hR = fbm((vWorld.xz + vec2(be, 0.0)) * bs);
-          float hD = fbm((vWorld.xz - vec2(0.0, be)) * bs);
-          float hU = fbm((vWorld.xz + vec2(0.0, be)) * bs);
-          n = normalize(n + vec3((hL - hR) * bump, 0.0, (hD - hU) * bump));
-
-          vec3 albedo = texture2D(uSat, vUv).rgb;
-          float lum = dot(albedo, vec3(0.299, 0.587, 0.114));
-          albedo = mix(vec3(lum), albedo, 1.16);        // gentle saturation lift
-          albedo = pow(max(albedo, 0.0), vec3(0.90));    // lift midtones
-
-          float ndl = dot(n, uSunDir);
-          // soft key: the mosaic already carries flat daylight, so add warmth
-          // and terrain self-shading without crushing it to black
-          float key = 0.45 + 0.7 * max(ndl, 0.0);
-          vec3 sky = uAmbient * (0.65 + 0.35 * n.y);
-          vec3 col = albedo * (uSunCol * key * 0.5 + sky);
-
-          // alpenglow: real snow/glacier pixels burn gold where the low sun
-          // strikes, and take a cool sky-fill where they fall into shadow
-          float snow = smoothstep(0.5, 0.8, lum);
-          col += snow * vec3(1.0, 0.55, 0.30) * pow(max(ndl, 0.0), 1.3) * 0.7;
-          col += snow * vec3(0.34, 0.42, 0.62) * (1.0 - max(ndl, 0.0)) * 0.18;
-
-          float fogAmt = 1.0 - exp(-dist * uFogDensity);
-          col = mix(col, uFogColor, fogAmt);
-          gl_FragColor = vec4(col, 1.0);
-        }
-      `,
+    // Physically-lit terrain: satellite albedo, real sun (cascaded shadows),
+    // hemisphere sky/ground fill (stands in for HDRI IBL until M3).
+    const terrMat = new THREE.MeshStandardMaterial({
+      map: assets.satelliteTex ?? null,
+      roughness: 0.97,
+      metalness: 0.0,
     });
-    const mesh = new THREE.Mesh(g, demMat);
-    mesh.receiveShadow = true;
+    // grade the flat noon mosaic + restore near-field micro-relief the coarse
+    // DEM tessellation loses; chained AFTER CSM's uniform injection
+    const gradeShader = (shader) => {
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWpos;')
+        .replace('#include <begin_vertex>',
+          '#include <begin_vertex>\nvWpos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>
+          varying vec3 vWpos;
+          float h21(vec2 p){p=fract(p*vec2(234.34,435.345));p+=dot(p,p+34.23);return fract(p.x*p.y);}
+          float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h21(i),h21(i+vec2(1,0)),f.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),f.x),f.y);}
+          float fbmT(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*vn(p);p=p*2.1+13.;a*=.5;}return v;}`)
+        .replace('#include <map_fragment>', `#include <map_fragment>
+          {
+            float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+            diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, 1.16);
+            diffuseColor.rgb = pow(max(diffuseColor.rgb, 0.0), vec3(0.90));
+          }`)
+        .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+          {
+            float d = length(vWpos - cameraPosition);
+            float amp = exp(-d * 0.004) * 1.3;
+            float e = 1.1, s = 0.05;
+            float hl = fbmT((vWpos.xz - vec2(e, 0.0)) * s), hr = fbmT((vWpos.xz + vec2(e, 0.0)) * s);
+            float hd = fbmT((vWpos.xz - vec2(0.0, e)) * s), hu = fbmT((vWpos.xz + vec2(0.0, e)) * s);
+            normal = normalize(normal + vec3((hl - hr) * amp, 0.0, (hd - hu) * amp));
+          }`);
+    };
+
+    const mesh = new THREE.Mesh(g, terrMat);
     mesh.castShadow = true;
+    mesh.receiveShadow = true;
     scene.add(mesh);
+
+    // sky/ground ambient fill
+    const hemi = new THREE.HemisphereLight(
+      new THREE.Color(...P.sky.horizon).lerp(new THREE.Color(1, 1, 1), 0.25),
+      new THREE.Color(...P.ambient), P.dem.hemi ?? 1.0);
+    scene.add(hemi);
+
+    // sun + cascaded shadow maps spanning the whole range
+    if (assets.camera) {
+      const lightDir = new THREE.Vector3(...P.sunDir).normalize().negate();
+      csm = new CSM({
+        camera: assets.camera,
+        parent: scene,
+        cascades: 3,
+        maxFar: P.dem.shadowFar ?? 2400,
+        mode: 'practical',
+        shadowMapSize: 2048,
+        lightDirection: lightDir,
+        lightIntensity: P.dem.sunIntensity ?? P.sun.power,
+        lightNear: 1,
+        lightFar: 6000,
+        lightMargin: 800,
+      });
+      const warm = new THREE.Color(...P.sun.color);
+      for (const l of csm.lights) {
+        l.color.copy(warm);
+        l.shadow.bias = -0.00018;
+        l.shadow.normalBias = 1.5;
+      }
+      csm.setupMaterial(terrMat);
+      const csmObc = terrMat.onBeforeCompile;
+      terrMat.onBeforeCompile = function (shader, r) {
+        csmObc.call(this, shader, r); // registers CSM uniforms + shader handle
+        gradeShader(shader);
+      };
+    } else {
+      terrMat.onBeforeCompile = gradeShader;
+    }
+
+    scene.fog = new THREE.FogExp2(new THREE.Color(...fogColor), P.dem.fogExp2 ?? 0.00028);
   } else {
   // ---- procedural terrain -----------------------------------------------------
   const SIZE = 1600, SEGS = 400, CENTER_Z = -260;
@@ -1080,5 +1112,5 @@ export function createTerrainScene(id, assets = {}) {
     entryLook: new THREE.Vector3(P.entryLook[0], standH + P.entryLook[1], P.entryLook[2]),
   };
 
-  return { id, name: P.name, scene, update, anchors, beacons, hasWater: !!P.water && !DEM, dem: D };
+  return { id, name: P.name, scene, update, anchors, beacons, hasWater: !!P.water && !DEM, dem: D, csm };
 }
