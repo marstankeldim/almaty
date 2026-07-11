@@ -57,8 +57,9 @@ function buildDemSampler(P, demGrid) {
   const upm = cfg.unitsPerMeter;
   const vExag = cfg.vExag;
   const [uS, vS] = cfg.station;
-  const spanX = meta.width * mpp * upm;   // full E–W extent, scene units
-  const spanZ = meta.height * mpp * upm;  // full N–S extent, scene units
+  // dimensions come from the decoded PNG itself — sidecar schemas vary
+  const spanX = demGrid.width * mpp * upm;   // full E–W extent, scene units
+  const spanZ = demGrid.height * mpp * upm;  // full N–S extent, scene units
   const elevStation = sample(uS, vS);
   const clamp01 = (x) => Math.min(1, Math.max(0, x));
 
@@ -205,7 +206,11 @@ const PRESETS = {
       fogDensity: 0.00034,    // (procedural-path fallback)
       fogExp2: 0.00024,       // MeshStandard FogExp2 for the lit DEM
       sunIntensity: 3.1,
-      hemi: 1.15,
+      hemi: 1.15,             // no-IBL fallback fill
+      hdri: '/assets/hdri/sunrise-mountain-4k.hdr',
+      envIntensity: 0.18,     // subtle fill — the CSM sun stays the key light
+      envYaw: 0,              // rotate HDRI sun to match sunDir (look-dev)
+      hemiWithEnv: 0.05,      // near-zero ground bounce alongside IBL
       shadowFar: 2400,
       segX: 700, segZ: 466,
     },
@@ -277,8 +282,8 @@ const PRESETS = {
 };
 
 // ---------------------------------------------------------------------------
-export function presetHasDem(id) {
-  return !!PRESETS[id]?.dem;
+export function presetDem(id) {
+  return PRESETS[id]?.dem ?? null;
 }
 
 export function createTerrainScene(id, assets = {}) {
@@ -402,10 +407,19 @@ export function createTerrainScene(id, assets = {}) {
     mesh.receiveShadow = true;
     scene.add(mesh);
 
-    // sky/ground ambient fill
+    // lighting fill: HDRI image-based lighting when available, with a faint
+    // ground bounce; hemisphere-only as the no-asset fallback
+    if (assets.envMap) {
+      scene.environment = assets.envMap;
+      scene.environmentRotation = new THREE.Euler(0, P.dem.envYaw ?? 0, 0);
+      // material-level intensity: scene.environmentIntensity is silently
+      // ignored on this three version, so control it where it's guaranteed
+      terrMat.envMapIntensity = P.dem.envIntensity ?? 0.6;
+    }
     const hemi = new THREE.HemisphereLight(
       new THREE.Color(...P.sky.horizon).lerp(new THREE.Color(1, 1, 1), 0.25),
-      new THREE.Color(...P.ambient), P.dem.hemi ?? 1.0);
+      new THREE.Color(...P.ambient),
+      assets.envMap ? (P.dem.hemiWithEnv ?? 0.25) : (P.dem.hemi ?? 1.0));
     scene.add(hemi);
 
     // sun + cascaded shadow maps spanning the whole range

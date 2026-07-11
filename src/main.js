@@ -3,10 +3,13 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { N8AOPass } from 'n8ao';
 import { loadGeo } from './geo.js';
 import { createGlobe } from './globe.js';
-import { createTerrainScene, presetHasDem } from './terrain.js';
+import { createTerrainScene, presetDem } from './terrain.js';
 import { loadDemGrid } from './dem.js';
+import { loadHdriEnvironment } from './assets.js';
 import { createDirector } from './director.js';
 import { createSoundscape } from './audio.js';
 import { createUI } from './ui.js';
@@ -65,7 +68,8 @@ async function boot() {
   async function loadLocationAssets() {
     const texLoader = new THREE.TextureLoader();
     for (const id of IMPLEMENTED) {
-      if (!presetHasDem(id)) continue;
+      const dem = presetDem(id);
+      if (!dem) continue;
       const demGrid = await loadDemGrid(id);
       if (!demGrid) continue;
       const satelliteTex = await new Promise((res) => texLoader.load(
@@ -73,7 +77,16 @@ async function boot() {
         (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; res(t); },
         undefined, () => res(null),
       ));
-      locationAssets[id] = { demGrid, satelliteTex };
+      let envMap = null;
+      if (dem.hdri) {
+        envMap = await loadHdriEnvironment(renderer, dem.hdri)
+          .then((r) => r.envMap)
+          .catch((e) => {
+            console.warn(`[atlas] HDRI for '${id}' unavailable (${e.message}) — hemisphere fill`);
+            return null;
+          });
+      }
+      locationAssets[id] = { demGrid, satelliteTex, envMap };
     }
   }
   await loadLocationAssets();
@@ -107,14 +120,58 @@ async function boot() {
     onTravel: (id) => director.travelTo(id),
   });
 
-  // post: gentle HDR bloom — the awakening, the sunrise, the city lights
-  const composer = new EffectComposer(renderer);
+  // post chain: MSAA render → AO (location scenes) → bloom → tonemap → grade
+  const drawSize = renderer.getDrawingBufferSize(new THREE.Vector2());
+  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(
+    drawSize.x, drawSize.y, { samples: 4, type: THREE.HalfFloatType }));
+
+  // two mutually-exclusive scene renderers: plain for the globe,
+  // N8AO (renders the scene itself) for the ground scenes
   const renderPass = new RenderPass(globe.scene, camera);
+  const aoPass = new N8AOPass(globe.scene, camera, drawSize.x, drawSize.y);
+  aoPass.configuration.halfRes = true;
+  aoPass.configuration.aoRadius = 22;
+  aoPass.configuration.intensity = 2.2;
+  aoPass.configuration.aoSamples = 12;
+  // OutputPass does the sRGB conversion — n8ao must not gamma-correct too
+  aoPass.configuration.gammaCorrection = false;
+  aoPass.enabled = false;
+
   const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.65, 0.85);
+    new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.65, 1.0);
+
+  // display-space filmic grade: gentle S-curve, cool shadow lift,
+  // warm highlights, fine animated grain — "camera", not "filter"
+  const gradePass = new ShaderPass({
+    uniforms: { tDiffuse: { value: null }, uTime: { value: 0 } },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D tDiffuse;
+      uniform float uTime;
+      varying vec2 vUv;
+      void main() {
+        vec3 c = texture2D(tDiffuse, vUv).rgb;
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        vec3 s = c * c * (3.0 - 2.0 * c);
+        c = mix(c, s, 0.22);
+        c += vec3(0.005, 0.007, 0.014) * smoothstep(0.18, 0.0, l);
+        c *= mix(vec3(1.0), vec3(1.035, 1.0, 0.955), smoothstep(0.55, 1.0, l) * 0.6);
+        float g = fract(sin(dot(gl_FragCoord.xy + mod(uTime, 10.0) * 61.7,
+                                vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+        c += g * 0.015 * (1.0 - l * 0.6);
+        gl_FragColor = vec4(c, 1.0);
+      }
+    `,
+  });
+
   composer.addPass(renderPass);
+  composer.addPass(aoPass);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
+  composer.addPass(gradePass);
 
   // ---- whiteout: the pass through the clouds --------------------------------
   const overlayScene = new THREE.Scene();
@@ -200,7 +257,7 @@ async function boot() {
   // ---- loop ----------------------------------------------------------------------
   const clock = new THREE.Clock();
   let wall = 0;
-  const stats = { ema: 16, fps: 60, pixelRatio: renderer.getPixelRatio(), frames: 0 };
+  const stats = { ema: 16, fps: 60, pixelRatio: renderer.getPixelRatio(), frames: 0, aoQuality: true };
 
   function setPixelRatio(pr) {
     stats.pixelRatio = pr;
@@ -227,7 +284,9 @@ async function boot() {
     ui.apply(p, sound.started, director.elapsed);
 
     renderer.clear();
-    if (p.scene === 'globe') {
+    gradePass.uniforms.uTime.value = wall;
+    const isGlobe = p.scene === 'globe';
+    if (isGlobe) {
       globe.update(wall, p);
       renderPass.scene = globe.scene;
     } else {
@@ -243,7 +302,11 @@ async function boot() {
         s.csm.updateUniforms();
       }
       renderPass.scene = s.scene;
+      aoPass.scene = s.scene;
     }
+    // AO renders the scene itself — exactly one scene renderer active
+    aoPass.enabled = !isGlobe && stats.aoQuality;
+    renderPass.enabled = !aoPass.enabled;
     bloomPass.strength = p.bloom;
     composer.render();
     if (p.whiteout > 0.002) {
@@ -262,11 +325,14 @@ async function boot() {
         stats.ema = stats.ema * 0.95 + ms * 0.05;
         stats.fps = 1000 / stats.ema;
         if (++stats.frames % 120 === 0) {
+          // quality ladder: shed AO first, then resolution; restore in reverse
           const maxPr = Math.min(window.devicePixelRatio, 2);
-          if (stats.ema > 22 && stats.pixelRatio > 1.0) {
-            setPixelRatio(Math.max(1.0, stats.pixelRatio - 0.25));
-          } else if (stats.ema < 13 && stats.pixelRatio < maxPr) {
-            setPixelRatio(Math.min(maxPr, stats.pixelRatio + 0.25));
+          if (stats.ema > 22) {
+            if (stats.aoQuality) stats.aoQuality = false;
+            else if (stats.pixelRatio > 1.0) setPixelRatio(Math.max(1.0, stats.pixelRatio - 0.25));
+          } else if (stats.ema < 13) {
+            if (stats.pixelRatio < maxPr) setPixelRatio(Math.min(maxPr, stats.pixelRatio + 0.25));
+            else stats.aoQuality = true;
           }
         }
       }
@@ -279,6 +345,7 @@ async function boot() {
   window.__atlas = {
     director,
     stats,
+    post: { composer, renderPass, aoPass, bloomPass, gradePass },
     step: (dt = 1 / 30) => frame(dt),
     travelTo: (id) => director.travelTo(id),
     // screen-space position of the active scene's first beacon (for tests)
