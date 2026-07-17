@@ -170,9 +170,13 @@ async function stitchTiles(task) {
     },
   });
 
-  for (const tile of tileBuffers) {
-    mosaic.composite([{ input: tile.buffer, left: (tile.tileX - range.minX) * 256, top: (tile.tileY - range.minY) * 256 }]);
-  }
+  // sharp's composite() REPLACES the operation list on each call — pass every
+  // tile in one call or only the last tile survives on the blank canvas
+  mosaic.composite(tileBuffers.map((tile) => ({
+    input: tile.buffer,
+    left: (tile.tileX - range.minX) * 256,
+    top: (tile.tileY - range.minY) * 256,
+  })));
 
   const xMinPx = Math.floor(lonToMercatorX(bbox[0], zoom));
   const xMaxPx = Math.ceil(lonToMercatorX(bbox[2], zoom));
@@ -239,6 +243,15 @@ async function processTask(task, manifestMap) {
   return { path: task.path, sha256: sha256(outputBuffer), size: outputBuffer.length, license: task.license };
 }
 
+// Single source of truth for location coverage. Zoom is chosen per feature
+// scale: the whole Trans-Ili range reads at z12 (~28 m/px); the Big Almaty
+// cirque and Charyn gorge need z14 (~7 m/px) to hold their shape.
+const DEM_LOCATIONS = [
+  { id: 'trans-ili-alatau', title: 'Trans-Ili', bbox: [76.9, 43.0, 77.6, 43.25], zoom: 12 },
+  { id: 'big-almaty-lake', title: 'Big Almaty Lake', bbox: [76.94, 43.02, 77.04, 43.09], zoom: 14 },
+  { id: 'charyn-canyon', title: 'Charyn Canyon', bbox: [79.0, 43.31, 79.14, 43.41], zoom: 14 },
+];
+
 async function run() {
   await ensureDir(assetsRoot);
 
@@ -249,12 +262,10 @@ async function run() {
     { kind: 'download', path: 'public/assets/globe/earth-day-8k.jpg', url: 'https://images-assets.nasa.gov/image/PIA18033/PIA18033~orig.jpg', outputFormat: 'jpg', license: 'Public domain', attribution: 'NASA Visible Earth / NASA image archive (public domain).' },
     { kind: 'download', path: 'public/assets/globe/earth-night-8k.jpg', url: 'https://images-assets.nasa.gov/image/PIA00422/PIA00422~orig.jpg', outputFormat: 'jpg', license: 'Public domain', attribution: 'NASA Visible Earth / NASA image archive (public domain).' },
     { kind: 'download', path: 'public/assets/globe/earth-clouds-4k.jpg', url: 'https://images-assets.nasa.gov/image/PIA03519/PIA03519~orig.jpg', outputFormat: 'jpg', license: 'Public domain', attribution: 'NASA Visible Earth / NASA image archive (public domain).' },
-    { kind: 'stitch', path: 'public/assets/dem/trans-ili-alatau.png', bbox: [76.9, 43.0, 77.6, 43.25], zoom: 12, tileUrlTemplate: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png', outputFormat: 'png', license: 'Public domain', attribution: 'AWS Terrain Tiles (public domain / no key required).', title: 'Trans-Ili DEM' },
-    { kind: 'stitch', path: 'public/assets/dem/big-almaty-lake.png', bbox: [76.93, 43.02, 77.03, 43.10], zoom: 13, tileUrlTemplate: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png', outputFormat: 'png', license: 'Public domain', attribution: 'AWS Terrain Tiles (public domain / no key required).', title: 'Big Almaty Lake DEM' },
-    { kind: 'stitch', path: 'public/assets/dem/charyn-canyon.png', bbox: [78.95, 43.30, 79.15, 43.42], zoom: 13, tileUrlTemplate: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png', outputFormat: 'png', license: 'Public domain', attribution: 'AWS Terrain Tiles (public domain / no key required).', title: 'Charyn Canyon DEM' },
-    { kind: 'stitch', path: 'public/assets/satellite/trans-ili-alatau.jpg', bbox: [76.9, 43.0, 77.6, 43.25], zoom: 12, tileUrlTemplate: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg', outputFormat: 'jpg', license: 'CC-BY 4.0', attribution: 'EOX Sentinel-2 cloudless mosaic, CC-BY 4.0.' , title: 'Trans-Ili satellite mosaic' },
-    { kind: 'stitch', path: 'public/assets/satellite/big-almaty-lake.jpg', bbox: [76.93, 43.02, 77.03, 43.10], zoom: 13, tileUrlTemplate: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg', outputFormat: 'jpg', license: 'CC-BY 4.0', attribution: 'EOX Sentinel-2 cloudless mosaic, CC-BY 4.0.', title: 'Big Almaty Lake satellite mosaic' },
-    { kind: 'stitch', path: 'public/assets/satellite/charyn-canyon.jpg', bbox: [78.95, 43.30, 79.15, 43.42], zoom: 13, tileUrlTemplate: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg', outputFormat: 'jpg', license: 'CC-BY 4.0', attribution: 'EOX Sentinel-2 cloudless mosaic, CC-BY 4.0.', title: 'Charyn Canyon satellite mosaic' },
+    ...DEM_LOCATIONS.flatMap((loc) => [
+      { kind: 'stitch', path: `public/assets/dem/${loc.id}.png`, bbox: loc.bbox, zoom: loc.zoom, tileUrlTemplate: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png', outputFormat: 'png', license: 'Public domain', attribution: 'AWS Terrain Tiles (public domain / no key required).', title: `${loc.title} DEM` },
+      { kind: 'stitch', path: `public/assets/satellite/${loc.id}.jpg`, bbox: loc.bbox, zoom: loc.zoom, tileUrlTemplate: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg', outputFormat: 'jpg', license: 'CC-BY 4.0', attribution: 'EOX Sentinel-2 cloudless mosaic, CC-BY 4.0.', title: `${loc.title} satellite mosaic` },
+    ]),
     { kind: 'download', path: 'public/assets/hdri/sunrise-mountain-4k.hdr', url: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloppenheim_06_4k.hdr', outputFormat: 'hdr', license: 'CC0', attribution: 'PolyHaven HDRI asset (CC0).' },
     { kind: 'download', path: 'public/assets/hdri/morning-alpine-4k.hdr', url: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/forest_slope_4k.hdr', outputFormat: 'hdr', license: 'CC0', attribution: 'PolyHaven HDRI asset (CC0).' },
     { kind: 'download', path: 'public/assets/hdri/afternoon-desert-4k.hdr', url: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/green_point_park_4k.hdr', outputFormat: 'hdr', license: 'CC0', attribution: 'PolyHaven HDRI asset (CC0).' },
@@ -303,32 +314,14 @@ async function run() {
     }
   }
 
-  const demMeta = [
-    {
-      path: 'public/assets/dem/trans-ili-alatau.json',
-      bbox: [76.9, 43.0, 77.6, 43.25],
-      zoom: 12,
-      pixelSize: computeMetersPerPixel([76.9, 43.0, 77.6, 43.25], 12),
-      metersPerPixel: computeMetersPerPixel([76.9, 43.0, 77.6, 43.25], 12),
-      bboxMeters: bboxMeterSpan([76.9, 43.0, 77.6, 43.25]),
-    },
-    {
-      path: 'public/assets/dem/big-almaty-lake.json',
-      bbox: [76.93, 43.02, 77.03, 43.10],
-      zoom: 13,
-      pixelSize: computeMetersPerPixel([76.93, 43.02, 77.03, 43.10], 13),
-      metersPerPixel: computeMetersPerPixel([76.93, 43.02, 77.03, 43.10], 13),
-      bboxMeters: bboxMeterSpan([76.93, 43.02, 77.03, 43.10]),
-    },
-    {
-      path: 'public/assets/dem/charyn-canyon.json',
-      bbox: [78.95, 43.30, 79.15, 43.42],
-      zoom: 13,
-      pixelSize: computeMetersPerPixel([78.95, 43.30, 79.15, 43.42], 13),
-      metersPerPixel: computeMetersPerPixel([78.95, 43.30, 79.15, 43.42], 13),
-      bboxMeters: bboxMeterSpan([78.95, 43.30, 79.15, 43.42]),
-    },
-  ];
+  const demMeta = DEM_LOCATIONS.map((loc) => ({
+    path: `public/assets/dem/${loc.id}.json`,
+    bbox: loc.bbox,
+    zoom: loc.zoom,
+    pixelSize: computeMetersPerPixel(loc.bbox, loc.zoom),
+    metersPerPixel: computeMetersPerPixel(loc.bbox, loc.zoom),
+    bboxMeters: bboxMeterSpan(loc.bbox),
+  }));
 
   for (const item of demMeta) {
     const sidecarPath = path.join(repoRoot, item.path);

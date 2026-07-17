@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-04T12:32:33.802Z",
+  "generatedAt": "2026-07-15T17:15:55.309Z",
   "files": [
     {
       "path": "public/assets/globe/earth-day-8k.jpg",
@@ -36,28 +36,8 @@
       "sourceUrls": [
         "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
       ],
-      "sha256": "095a6e042b72249af846aa348a95c342014b91340663a0632c12609b5e7e8a2b",
-      "size": 8013,
-      "license": "Public domain",
-      "attribution": "AWS Terrain Tiles (public domain / no key required)."
-    },
-    {
-      "path": "public/assets/dem/big-almaty-lake.png",
-      "sourceUrls": [
-        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
-      ],
-      "sha256": "2ed706db282594712359c5e47f1f7ee3bbcb15a952cef1306c64aa10bd1db85d",
-      "size": 15124,
-      "license": "Public domain",
-      "attribution": "AWS Terrain Tiles (public domain / no key required)."
-    },
-    {
-      "path": "public/assets/dem/charyn-canyon.png",
-      "sourceUrls": [
-        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
-      ],
-      "sha256": "198233668d23911bab647130884b411dc0a746abc2c108fae73714107375d631",
-      "size": 4462,
+      "sha256": "36ee433e247670613f38b35ff4f1d4cfbcc3a5ba0c17f5c4b789e3d6c752ca87",
+      "size": 2998490,
       "license": "Public domain",
       "attribution": "AWS Terrain Tiles (public domain / no key required)."
     },
@@ -66,28 +46,48 @@
       "sourceUrls": [
         "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg"
       ],
-      "sha256": "baf1e0b25a9b03e7ac9460b5c4caa6037dbb9f42902d20398607e96346768774",
-      "size": 12362,
+      "sha256": "2fcffabbb3d70322c87556a2c90d28a57433d647f611630b99ec454054b9d38e",
+      "size": 667730,
       "license": "CC-BY 4.0",
       "attribution": "EOX Sentinel-2 cloudless mosaic, CC-BY 4.0."
+    },
+    {
+      "path": "public/assets/dem/big-almaty-lake.png",
+      "sourceUrls": [
+        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+      ],
+      "sha256": "ee0fcd83725eaebd21acd16b13d606761aa2bd862dc958c759eca4e48627d4cb",
+      "size": 3686640,
+      "license": "Public domain",
+      "attribution": "AWS Terrain Tiles (public domain / no key required)."
     },
     {
       "path": "public/assets/satellite/big-almaty-lake.jpg",
       "sourceUrls": [
         "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg"
       ],
-      "sha256": "0c4a836ed4a7742b6add4e407bfc6d7a5ede56a0cc443e37ddd23792f6a5c561",
-      "size": 5213,
+      "sha256": "a9210aa2c5d389ad57687d694cdce3504e7b85258442470c7a379e918e600e21",
+      "size": 223736,
       "license": "CC-BY 4.0",
       "attribution": "EOX Sentinel-2 cloudless mosaic, CC-BY 4.0."
+    },
+    {
+      "path": "public/assets/dem/charyn-canyon.png",
+      "sourceUrls": [
+        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+      ],
+      "sha256": "297e5923bb6a8c4181973c1c0e932bd3a03eee1b7719f8802d6dc4481bc2be80",
+      "size": 5745615,
+      "license": "Public domain",
+      "attribution": "AWS Terrain Tiles (public domain / no key required)."
     },
     {
       "path": "public/assets/satellite/charyn-canyon.jpg",
       "sourceUrls": [
         "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg"
       ],
-      "sha256": "b72bdbbe50dc0c81cb09f16eccd4822e36bf702835c51bb722c3394766961bdd",
-      "size": 6945,
+      "sha256": "8c42e31aca44193611fe6f2966e20d37f3a1239d8d600a82a4aed82cde5fe409",
+      "size": 422119,
       "license": "CC-BY 4.0",
       "attribution": "EOX Sentinel-2 cloudless mosaic, CC-BY 4.0."
     },
@@ -312,16 +312,16 @@
     {
       "path": "public/assets/dem/big-almaty-lake.json",
       "sourceUrls": [],
-      "sha256": "801924abf91cc2a9d6bb46bb25ef3ceedc5ef8ed6d9f2cd8971184a7dd2f8185",
-      "size": 302,
+      "sha256": "22f1abaa6e0a90ffac38a78938cedbca8c43db3c0a62adc6e0f6035cbac27ad7",
+      "size": 301,
       "license": "Public domain",
       "attribution": "DEM metadata derived from the requested bounding box and zoom level."
     },
     {
       "path": "public/assets/dem/charyn-canyon.json",
       "sourceUrls": [],
-      "sha256": "0f075b5233533eb5b5c38d76f36b87cbf9c64a8d898b63b1676ea9b21b8d020d",
-      "size": 302,
+      "sha256": "477f96384c4d466b2e26b3c766782e0008445fa4ae6db5f5090c1d8ff9f5f298",
+      "size": 298,
       "license": "Public domain",
       "attribution": "DEM metadata derived from the requested bounding box and zoom level."
     }
