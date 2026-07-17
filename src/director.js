@@ -76,6 +76,7 @@ export function createDirector({ camera, globe, scenes, ensureScene, onArrive })
     travel = {
       t: 0,
       to: id,
+      from: activeLoc,
       fromPos: camera.position.clone(),
       fromLook: scenes[activeLoc].anchors.lookRest.clone(),
       swapped: false,
@@ -153,13 +154,14 @@ export function createDirector({ camera, globe, scenes, ensureScene, onArrive })
         if (tt < J.LIFT) {
           const k = easeIn(seg(tt, 0, J.LIFT));
           const arc = Math.sin(k * Math.PI); // helicopter arc, not an elevator
+          const lift = scenes[travel.from]?.liftHeight ?? 260;
           _pos.copy(travel.fromPos);
-          _pos.y += k * 260;
-          _pos.z += k * 40;
-          _pos.x += arc * 28;
+          _pos.y += k * lift;
+          _pos.z += k * lift * 0.15;
+          _pos.x += arc * lift * 0.11;
           camera.position.copy(_pos);
           _look.copy(travel.fromLook);
-          _look.y += k * 120; // gaze rises toward the horizon as we climb
+          _look.y += k * lift * 0.45; // gaze rises toward the horizon as we climb
           camera.lookAt(_look);
           camera.rotateZ(arc * -0.06); // bank into the turn
           params.whiteout = seg(tt, J.WHITEOUT_IN, J.LIFT - 0.2);

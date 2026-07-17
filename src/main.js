@@ -15,10 +15,15 @@ import { createSoundscape } from './audio.js';
 import { createUI } from './ui.js';
 import { discover } from './locations.js';
 
+// A hidden or collapsing pane can report 0×0 — a NaN camera aspect poisons
+// the projection matrix silently. Never trust raw window dimensions.
+const viewW = () => Math.max(1, window.innerWidth);
+const viewH = () => Math.max(1, window.innerHeight);
+
 async function boot() {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(viewW(), viewH());
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0;
   renderer.autoClear = false;
@@ -26,7 +31,7 @@ async function boot() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.getElementById('app').appendChild(renderer.domElement);
 
-  const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.01, 50);
+  const camera = new THREE.PerspectiveCamera(40, viewW() / viewH(), 0.01, 50);
   camera.position.set(0, 0, 1.9);
 
   const geo = await loadGeo();
@@ -138,7 +143,7 @@ async function boot() {
   aoPass.enabled = false;
 
   const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.65, 1.0);
+    new THREE.Vector2(viewW(), viewH()), 0.35, 0.65, 1.0);
 
   // display-space filmic grade: gentle S-curve, cool shadow lift,
   // warm highlights, fine animated grain — "camera", not "filter"
@@ -226,7 +231,7 @@ async function boot() {
   function beaconAt(e) {
     const p = director.params;
     if (p.scene === 'globe' || !p.settled || director.traveling) return null;
-    pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+    pointer.set((e.clientX / viewW()) * 2 - 1, -(e.clientY / viewH()) * 2 + 1);
     raycaster.setFromCamera(pointer, camera);
     for (const b of scenes[p.scene].beacons) {
       if (raycaster.intersectObject(b.hit, false).length) return b;
@@ -248,10 +253,10 @@ async function boot() {
   });
   window.addEventListener('dblclick', () => director.skip());
   window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.aspect = viewW() / viewH();
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    composer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(viewW(), viewH());
+    composer.setSize(viewW(), viewH());
   });
 
   // ---- loop ----------------------------------------------------------------------
@@ -262,8 +267,8 @@ async function boot() {
   function setPixelRatio(pr) {
     stats.pixelRatio = pr;
     renderer.setPixelRatio(pr);
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    composer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(viewW(), viewH());
+    composer.setSize(viewW(), viewH());
   }
 
   function frame(dt) {
@@ -356,8 +361,8 @@ async function boot() {
       if (!b) return null;
       const v = b.hit.position.clone().project(camera);
       return {
-        x: (v.x * 0.5 + 0.5) * window.innerWidth,
-        y: (-v.y * 0.5 + 0.5) * window.innerHeight,
+        x: (v.x * 0.5 + 0.5) * viewW(),
+        y: (-v.y * 0.5 + 0.5) * viewH(),
         inFront: v.z < 1,
       };
     },

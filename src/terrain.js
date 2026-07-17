@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CSM } from 'three/addons/csm/CSM.js';
+import { LOCATIONS } from './locations.js';
 
 // ---------------------------------------------------------------------------
 // Deterministic 2D value noise (CPU) — heightfields & placement
@@ -65,13 +66,20 @@ function buildDemSampler(P, demGrid) {
 
   // world (x,z) → DEM (u,v). +X east, −Z south (in front of the camera).
   const uvOf = (x, z) => [clamp01(uS + x / spanX), clamp01(vS - z / spanZ)];
+  // `deepen` amplifies below-station relief — canyon walls the DEM's meters-
+  // per-pixel resolution flattens get their visual depth back
+  const deepen = cfg.deepen ?? 1;
   const height = (x, z) => {
     const [u, v] = uvOf(x, z);
-    return (sample(u, v) - elevStation) * upm * vExag;
+    let h = sample(u, v) - elevStation;
+    if (h < 0) h *= deepen;
+    return h * upm * vExag;
   };
 
   const xMin = -uS * spanX, xMax = (1 - uS) * spanX;
   const zBack = vS * spanZ, zFront = -(1 - vS) * spanZ;
+  const sceneOf = (u, v) => [(u - uS) * spanX, -(v - vS) * spanZ];
+  const heightAtUv = (u, v) => (sample(u, v) - elevStation) * upm * vExag;
 
   // find the tallest summit in the forward view to aim the camera at
   let best = { h: -Infinity, x: 0, z: zFront * 0.5 };
@@ -85,20 +93,35 @@ function buildDemSampler(P, demGrid) {
     }
   }
   const peakY = (best.h - elevStation) * upm * vExag;
-  // aerial vantage: hover near peak-shoulder height, a set distance north of
-  // the summit, looking south across the range (matches the reference plate)
-  const camY = peakY * (cfg.heightFrac ?? 0.85);
-  const viewDist = (cfg.viewDistFrac ?? 0.32) * spanZ;
-  const stand = new THREE.Vector3(best.x * 0.35, camY, best.z + viewDist);
-  const look = new THREE.Vector3(best.x, peakY * 0.92, best.z);
+
+  let stand, look;
+  if (cfg.focus) {
+    // grounded vantage: stand at the station, a set height above the terrain,
+    // gazing at a chosen DEM point (a lake, a gorge) rather than the summit
+    const [fu, fv] = cfg.focus;
+    const [fx, fz] = sceneOf(fu, fv);
+    const fy = heightAtUv(fu, fv);
+    stand = new THREE.Vector3(0, (cfg.camAboveM ?? 60) * upm * vExag, 0);
+    look = new THREE.Vector3(fx, fy + (cfg.lookLiftM ?? 0) * upm * vExag, fz);
+  } else {
+    // aerial vantage: hover near peak-shoulder height, a set distance north of
+    // the summit, looking south across the range (matches the reference plate)
+    const camY = peakY * (cfg.heightFrac ?? 0.85);
+    const viewDist = (cfg.viewDistFrac ?? 0.32) * spanZ;
+    stand = new THREE.Vector3(best.x * 0.35, camY, best.z + viewDist);
+    look = new THREE.Vector3(best.x, peakY * 0.92, best.z);
+  }
   const anchors = {
     stand,
     lookRest: look,
-    entryPos: new THREE.Vector3(best.x * 0.1, camY + spanZ * 0.12, stand.z + spanZ * 0.14),
-    entryLook: new THREE.Vector3(best.x * 0.6, peakY * 0.65, best.z * 0.6),
+    entryPos: new THREE.Vector3(
+      stand.x + (look.x - stand.x) * -0.1,
+      stand.y + spanZ * 0.11,
+      stand.z + spanZ * 0.13),
+    entryLook: new THREE.Vector3().lerpVectors(stand, look, 0.6),
   };
 
-  return { height, uvOf, xMin, xMax, zFront, zBack, anchors, peak: best, peakY, stand };
+  return { height, uvOf, sceneOf, heightAtUv, xMin, xMax, zFront, zBack, anchors, peak: best, peakY, stand };
 }
 
 const NOISE_GLSL = /* glsl */ `
@@ -251,6 +274,26 @@ const PRESETS = {
       { to: 'trans-ili-alatau', name: 'Trans-Ili Alatau', x: 38, z: -160, h: 58 },
       { to: 'charyn-canyon', name: 'Charyn Canyon', x: -52, z: -150, h: 58 },
     ],
+    // the real cirque at ~2500m: stand on the north shore, gaze south across
+    // the turquoise water into the amphitheatre of peaks
+    dem: {
+      station: [0.46, 0.41],
+      focus: [0.42, 0.72],
+      camAboveM: 90,
+      lookLiftM: 350,
+      unitsPerMeter: 0.1,   // intimate scale: 1 unit = 10m
+      vExag: 1.0,           // true proportions at close range
+      fogColor: [0.60, 0.58, 0.56],
+      fogExp2: 0.00012,
+      sunIntensity: 2.8,
+      hemiWithEnv: 0.05,
+      hdri: '/assets/hdri/morning-alpine-4k.hdr',
+      envIntensity: 0.22,
+      envYaw: 0,
+      shadowFar: 1000,
+      segX: 583, segZ: 558,
+      water: { center: [0.435, 0.536], radiusM: 520 },
+    },
   },
 
   'charyn-canyon': {
@@ -278,6 +321,29 @@ const PRESETS = {
     entryLook: [2, -30, -92],
     birds: { height: [70, 105], radius: [65, 120], cz: -122 },
     beacons: [{ to: 'big-almaty-lake', name: 'Big Almaty Lake', x: 14, z: -180, h: 58 }],
+    // the real gorge: stand on the northern rim of the Valley of Castles,
+    // gazing along the winding red trench toward the afternoon sun
+    dem: {
+      station: [0.43, 0.53],
+      focus: [0.536, 0.59],
+      camAboveM: 45,
+      lookLiftM: 20,
+      unitsPerMeter: 0.1,
+      vExag: 1.15,
+      deepen: 1.6,          // restore the wall depth z14 sampling flattens
+      saturation: 1.32,     // let the red strata burn
+      gamma: 0.86,
+      bands: { freq: 2.2, strength: 0.5 },
+      fogColor: [0.66, 0.48, 0.30],
+      fogExp2: 0.00018,
+      sunIntensity: 3.0,
+      hemiWithEnv: 0.06,
+      hdri: '/assets/hdri/afternoon-desert-4k.hdr',
+      envIntensity: 0.25,
+      envYaw: 0,
+      shadowFar: 900,
+      segX: 640, segZ: 630,
+    },
   },
 };
 
@@ -388,8 +454,15 @@ export function createTerrainScene(id, assets = {}) {
         .replace('#include <map_fragment>', `#include <map_fragment>
           {
             float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-            diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, 1.16);
-            diffuseColor.rgb = pow(max(diffuseColor.rgb, 0.0), vec3(0.90));
+            diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, ${(P.dem.saturation ?? 1.16).toFixed(3)});
+            diffuseColor.rgb = pow(max(diffuseColor.rgb, 0.0), vec3(${(P.dem.gamma ?? 0.90).toFixed(3)}));
+            ${P.dem.bands ? `
+            // sedimentary strata: horizontal layer tints on steep faces only
+            float steep = smoothstep(0.85, 0.55, normalize(vNormal).y);
+            float layer = floor(vWpos.y * ${P.dem.bands.freq.toFixed(2)} + fbmT(vWpos.xz * 0.06) * 1.6);
+            float lr = h21(vec2(layer, 7.0));
+            diffuseColor.rgb *= mix(1.0, mix(${(1 - P.dem.bands.strength / 2).toFixed(3)}, ${(1 + P.dem.bands.strength / 2).toFixed(3)}, lr), steep);
+            ` : ''}
           }`)
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           {
@@ -549,8 +622,22 @@ export function createTerrainScene(id, assets = {}) {
   const standH = DEM ? 0 : H(P.stand.x, P.stand.z);
 
   // ---- water (Big Almaty Lake's turquoise mirror) -----------------------------
-  if (P.water && !DEM) {
-    const W = P.water;
+  // DEM scenes place the plane at the real lake surface (the DEM carries the
+  // water's own elevation); colors come from the shared P.water recipe.
+  let W = null;
+  if (DEM && P.water && P.dem.water) {
+    const [wu, wv] = P.dem.water.center;
+    const [wx, wz] = D.sceneOf(wu, wv);
+    W = {
+      ...P.water,
+      center: { x: wx, z: wz },
+      level: D.heightAtUv(wu, wv) + 0.25,
+      radius: P.dem.water.radiusM * P.dem.unitsPerMeter,
+    };
+  } else if (!DEM) {
+    W = P.water;
+  }
+  if (W) {
     const wGeo = new THREE.CircleGeometry(W.radius, 72);
     wGeo.rotateX(-Math.PI / 2);
     wGeo.translate(W.center.x, W.level, W.center.z);
@@ -871,8 +958,8 @@ export function createTerrainScene(id, assets = {}) {
     }
   }
 
-  // ---- valley cloud sea (DEM scenes) — banks pooling between the ridges --------
-  if (DEM) {
+  // ---- valley cloud sea (aerial DEM scenes) — banks pooling between the ridges --
+  if (DEM && !P.dem.focus) {
     const spanX = D.xMax - D.xMin;
     const level = D.peakY * 0.17;
     for (let i = 0; i < 50; i++) {
@@ -898,16 +985,19 @@ export function createTerrainScene(id, assets = {}) {
   }
 
   // ---- dust motes -----------------------------------------------------------------
-  if (!DEM) {
+  if (!DEM || P.dem.focus) {
     const DUST = P.dust?.count ?? 420;
     const dustAlpha = P.dust?.alpha ?? 1.0;
+    const cx = DEM ? D.stand.x : 0;
+    const cy = DEM ? D.stand.y - 2 : standH + 0.5;
+    const cz = DEM ? D.stand.z : P.stand.z;
     const dPos = new Float32Array(DUST * 3);
     const dPhase = new Float32Array(DUST);
     for (let i = 0; i < DUST; i++) {
-      dPos[i * 3] = (Math.random() - 0.5) * 46;
-      dPos[i * 3 + 1] = standH + 0.5 + Math.random() * 7;
-      dPos[i * 3 + 2] = P.stand.z + (Math.random() - 0.5) * 46;
-    dPhase[i] = Math.random() * Math.PI * 2;
+      dPos[i * 3] = cx + (Math.random() - 0.5) * 46;
+      dPos[i * 3 + 1] = cy + Math.random() * 7;
+      dPos[i * 3 + 2] = cz + (Math.random() - 0.5) * 46;
+      dPhase[i] = Math.random() * Math.PI * 2;
     }
     const dGeo = new THREE.BufferGeometry();
     dGeo.setAttribute('position', new THREE.BufferAttribute(dPos, 3));
@@ -948,8 +1038,10 @@ export function createTerrainScene(id, assets = {}) {
   }
 
   // ---- birds ---------------------------------------------------------------------
+  // In DEM scenes birds fly only at grounded (focus) vantages, at true scale —
+  // from the aerial overlook they'd be sub-pixel anyway.
   const birds = [];
-  if (!DEM) {
+  if (!DEM || P.dem.focus) {
     const wingGeo = new THREE.BufferGeometry();
     wingGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
       0, 0, -0.16,   0, 0, 0.14,   0.65, 0, -0.05,
@@ -957,33 +1049,67 @@ export function createTerrainScene(id, assets = {}) {
     ]), 3));
     wingGeo.computeVertexNormals();
     const birdMat = new THREE.MeshBasicMaterial({ color: 0x1a1611, side: THREE.DoubleSide });
+    const upm = DEM ? P.dem.unitsPerMeter : 1;
     for (let i = 0; i < 7; i++) {
       const b = new THREE.Group();
       const wl = new THREE.Mesh(wingGeo, birdMat);
       wl.scale.x = -1;
       const wr = new THREE.Mesh(wingGeo, birdMat);
       b.add(wl, wr);
-      b.scale.setScalar(0.8 + Math.random() * 0.5);
-      b.userData = {
-        radius: P.birds.radius[0] + Math.random() * (P.birds.radius[1] - P.birds.radius[0]),
-        height: standH + P.birds.height[0] + Math.random() * (P.birds.height[1] - P.birds.height[0]),
+      if (DEM) {
+        // ~2m wingspan raptors circling between the camera and the focus
+        b.scale.setScalar((28 + Math.random() * 14) * upm);
+        const mid = new THREE.Vector3().lerpVectors(D.stand, D.anchors.lookRest, 0.35);
+        b.userData = {
+          cx: mid.x, cz: mid.z,
+          radius: (150 + Math.random() * 250) * upm,
+          height: D.stand.y + (20 + Math.random() * 120) * upm,
+        };
+      } else {
+        b.scale.setScalar(0.8 + Math.random() * 0.5);
+        b.userData = {
+          cx: 0, cz: P.birds.cz,
+          radius: P.birds.radius[0] + Math.random() * (P.birds.radius[1] - P.birds.radius[0]),
+          height: standH + P.birds.height[0] + Math.random() * (P.birds.height[1] - P.birds.height[0]),
+        };
+      }
+      Object.assign(b.userData, {
         speed: 0.08 + Math.random() * 0.08,
         phase: Math.random() * Math.PI * 2,
         flap: 4.0 + Math.random() * 2.5,
         wl, wr,
-      };
+      });
       scene.add(b);
       birds.push(b);
     }
   }
 
   // ---- discovery beacons: faint pillars of light on the horizon ---------------------
+  // DEM scenes place beacons at the destination's TRUE geographic position
+  // (clamped to a horizon ring when it lies beyond the scene's coverage).
+  let beaconDefs = P.beacons || [];
+  if (DEM) {
+    const [bw, bs, be, bn] = assets.demGrid.meta.bbox;
+    const upm = P.dem.unitsPerMeter;
+    beaconDefs = (P.beacons || []).map((B) => {
+      const t = LOCATIONS.find((l) => l.id === B.to);
+      if (!t) return null;
+      const u = (t.lon - bw) / (be - bw);
+      const v = (bn - t.lat) / (bn - bs);
+      let [x, z] = D.sceneOf(u, v);
+      // targets beyond the DEM's coverage settle on its edge, true direction kept
+      x = THREE.MathUtils.clamp(x, D.xMin * 0.88, D.xMax * 0.88);
+      z = THREE.MathUtils.clamp(z, D.zFront * 0.88, D.zBack * 0.88);
+      return { ...B, x, z, h: 550 * upm * (P.dem.beaconScale ?? 1) };
+    }).filter(Boolean);
+  }
   const beacons = [];
-  for (const B of (DEM ? [] : (P.beacons || []))) {
+  for (const B of beaconDefs) {
     const groundY = H(B.x, B.z);
     const group = new THREE.Group();
+    const bs = B.h / 58; // radii keep the reference pillar's proportions
 
-    const pillarGeo = new THREE.CylinderGeometry(1.7, 2.4, B.h, 16, 1, true);
+    const pillarGeo = new THREE.CylinderGeometry(1.7 * bs, 2.4 * bs, B.h, 16, 1, true);
     const pillarMat = new THREE.ShaderMaterial({
       uniforms: { uTime: uniforms.uTime, uH: { value: B.h } },
       transparent: true,
@@ -1033,8 +1159,8 @@ export function createTerrainScene(id, assets = {}) {
       opacity: 0.55,
     });
     const glow = new THREE.Sprite(glowMat);
-    glow.position.set(B.x, groundY + 3.5, B.z);
-    glow.scale.set(16, 10, 1);
+    glow.position.set(B.x, groundY + 3.5 * bs, B.z);
+    glow.scale.set(16 * bs, 10 * bs, 1);
     group.add(glow);
 
     // slow-rising embers inside the pillar
@@ -1043,7 +1169,7 @@ export function createTerrainScene(id, assets = {}) {
     const ePhase = new Float32Array(EMBERS);
     for (let i = 0; i < EMBERS; i++) {
       const a = Math.random() * Math.PI * 2;
-      const r = Math.random() * 1.6;
+      const r = Math.random() * 1.6 * bs;
       ePos[i * 3] = B.x + Math.cos(a) * r;
       ePos[i * 3 + 1] = groundY;
       ePos[i * 3 + 2] = B.z + Math.sin(a) * r;
@@ -1084,7 +1210,7 @@ export function createTerrainScene(id, assets = {}) {
     group.add(embers);
 
     const hit = new THREE.Mesh(
-      new THREE.CylinderGeometry(8, 8, B.h * 1.15, 8),
+      new THREE.CylinderGeometry(8 * bs, 8 * bs, B.h * 1.15, 8),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
     hit.position.set(B.x, groundY + B.h * 0.5, B.z);
@@ -1107,9 +1233,9 @@ export function createTerrainScene(id, assets = {}) {
       const u = b.userData;
       const a = t * u.speed + u.phase;
       b.position.set(
-        Math.cos(a) * u.radius,
-        u.height + Math.sin(t * 0.4 + u.phase) * 2.5,
-        P.birds.cz + Math.sin(a) * u.radius,
+        u.cx + Math.cos(a) * u.radius,
+        u.height + Math.sin(t * 0.4 + u.phase) * u.radius * 0.06,
+        u.cz + Math.sin(a) * u.radius,
       );
       b.rotation.y = -a - Math.PI / 2;
       const cycle = 0.5 + 0.5 * Math.sin(t * 0.35 + u.phase * 2.0);
@@ -1126,5 +1252,8 @@ export function createTerrainScene(id, assets = {}) {
     entryLook: new THREE.Vector3(P.entryLook[0], standH + P.entryLook[1], P.entryLook[2]),
   };
 
-  return { id, name: P.name, scene, update, anchors, beacons, hasWater: !!P.water && !DEM, dem: D, csm };
+  // travel lift needs to clear local terrain — scale with the scene's relief
+  const liftHeight = DEM ? Math.max(D.peakY * 1.15, (D.zBack - D.zFront) * 0.2) : 260;
+
+  return { id, name: P.name, scene, update, anchors, beacons, hasWater: !!W, dem: D, csm, liftHeight };
 }
