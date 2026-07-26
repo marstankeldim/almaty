@@ -276,11 +276,13 @@ const PRESETS = {
     ],
     // the real cirque at ~2500m: stand on the north shore, gaze south across
     // the turquoise water into the amphitheatre of peaks
+    // lake basin measured from the DEM itself: flattest contiguous region sits
+    // at 2506m, uv (0.586, 0.714), ~714 × 1127m — the real Big Almaty Lake
     dem: {
-      station: [0.46, 0.41],
-      focus: [0.42, 0.72],
-      camAboveM: 90,
-      lookLiftM: 350,
+      station: [0.586, 0.600],  // north shore, just off the water
+      focus: [0.586, 0.760],    // gaze south down the lake into the cirque
+      camAboveM: 95,
+      lookLiftM: 420,
       unitsPerMeter: 0.1,   // intimate scale: 1 unit = 10m
       vExag: 1.0,           // true proportions at close range
       fogColor: [0.60, 0.58, 0.56],
@@ -292,7 +294,7 @@ const PRESETS = {
       envYaw: 0,
       shadowFar: 1000,
       segX: 583, segZ: 558,
-      water: { center: [0.435, 0.536], radiusM: 520 },
+      water: { center: [0.586, 0.714], radiusM: 330 },
     },
   },
 
@@ -323,16 +325,18 @@ const PRESETS = {
     beacons: [{ to: 'big-almaty-lake', name: 'Big Almaty Lake', x: 14, z: -180, h: 58 }],
     // the real gorge: stand on the northern rim of the Valley of Castles,
     // gazing along the winding red trench toward the afternoon sun
+    // measured from the DEM: a 232m-deep gorge whose floor runs northeast from
+    // uv (0.57, 0.77) to (0.71, 0.63); rim to the northwest sits at 1143m
     dem: {
-      station: [0.43, 0.53],
-      focus: [0.536, 0.59],
-      camAboveM: 45,
-      lookLiftM: 20,
+      station: [0.532, 0.751],  // on the rim above the deepest reach
+      focus: [0.700, 0.645],    // gaze northeast along the trench
+      camAboveM: 120,           // clear the rim's own shoulder
+      lookLiftM: -40,           // tilt down into the canyon
       unitsPerMeter: 0.1,
       vExag: 1.15,
-      deepen: 1.6,          // restore the wall depth z14 sampling flattens
-      saturation: 1.32,     // let the red strata burn
-      gamma: 0.86,
+      deepen: 1.9,          // restore the wall depth z14 sampling flattens
+      saturation: 1.6,      // let the red strata burn
+      gamma: 0.82,
       bands: { freq: 2.2, strength: 0.5 },
       fogColor: [0.66, 0.48, 0.30],
       fogExp2: 0.00018,
@@ -438,9 +442,33 @@ export function createTerrainScene(id, assets = {}) {
       roughness: 0.97,
       metalness: 0.0,
     });
+    // A real lake is already in the satellite drape and already flat in the
+    // DEM — so shade water where the terrain IS water (level + flat) instead
+    // of floating a disc that can't match its shape. Ripples ride the surface
+    // normal; the specular streak comes from the scene's own sun.
+    const wcfg = P.dem.water;
+    const waterMaskGlsl = wcfg ? `
+      {
+        float lvl = ${(D.heightAtUv(...wcfg.center) + 0.02).toFixed(4)};
+        float flat = smoothstep(0.55, 0.9, normalize(vNormal).y);
+        float band = 1.0 - smoothstep(0.0, ${(wcfg.bandUnits ?? 1.2).toFixed(2)}, abs(vWpos.y - lvl));
+        float wet = flat * band;
+        if (wet > 0.01) {
+          float rs = ${(1 / (P.dem.unitsPerMeter * 10)).toFixed(3)};
+          vec2 wp = vWpos.xz * 2.2 * rs;
+          float we = 0.09;
+          float w0 = fbmT(wp + vec2(uWaterTime * 0.05, uWaterTime * 0.03));
+          float wx = fbmT(wp + vec2(we, 0.0) + vec2(uWaterTime * 0.05, uWaterTime * 0.03)) - w0;
+          float wz = fbmT(wp + vec2(0.0, we) + vec2(uWaterTime * 0.05, uWaterTime * 0.03)) - w0;
+          normal = normalize(mix(normal, normalize(vec3(wx * 9.0, 1.0, wz * 9.0)), wet));
+          roughnessFactor = mix(roughnessFactor, 0.045, wet);
+        }
+      }` : '';
+
     // grade the flat noon mosaic + restore near-field micro-relief the coarse
     // DEM tessellation loses; chained AFTER CSM's uniform injection
     const gradeShader = (shader) => {
+      if (wcfg) shader.uniforms.uWaterTime = uniforms.uTime;
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vWpos;')
         .replace('#include <begin_vertex>',
@@ -448,6 +476,7 @@ export function createTerrainScene(id, assets = {}) {
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           varying vec3 vWpos;
+          ${wcfg ? 'uniform float uWaterTime;' : ''}
           float h21(vec2 p){p=fract(p*vec2(234.34,435.345));p+=dot(p,p+34.23);return fract(p.x*p.y);}
           float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h21(i),h21(i+vec2(1,0)),f.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),f.x),f.y);}
           float fbmT(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*vn(p);p=p*2.1+13.;a*=.5;}return v;}`)
@@ -472,6 +501,7 @@ export function createTerrainScene(id, assets = {}) {
             float hl = fbmT((vWpos.xz - vec2(e, 0.0)) * s), hr = fbmT((vWpos.xz + vec2(e, 0.0)) * s);
             float hd = fbmT((vWpos.xz - vec2(0.0, e)) * s), hu = fbmT((vWpos.xz + vec2(0.0, e)) * s);
             normal = normalize(normal + vec3((hl - hr) * amp, 0.0, (hd - hu) * amp));
+            ${waterMaskGlsl}
           }`);
     };
 
@@ -624,19 +654,9 @@ export function createTerrainScene(id, assets = {}) {
   // ---- water (Big Almaty Lake's turquoise mirror) -----------------------------
   // DEM scenes place the plane at the real lake surface (the DEM carries the
   // water's own elevation); colors come from the shared P.water recipe.
-  let W = null;
-  if (DEM && P.water && P.dem.water) {
-    const [wu, wv] = P.dem.water.center;
-    const [wx, wz] = D.sceneOf(wu, wv);
-    W = {
-      ...P.water,
-      center: { x: wx, z: wz },
-      level: D.heightAtUv(wu, wv) + 0.25,
-      radius: P.dem.water.radiusM * P.dem.unitsPerMeter,
-    };
-  } else if (!DEM) {
-    W = P.water;
-  }
+  // DEM scenes shade water as a terrain mask (see waterMaskGlsl) — the real
+  // shoreline comes from the elevation model, so no disc is needed.
+  const W = DEM ? null : P.water;
   if (W) {
     const wGeo = new THREE.CircleGeometry(W.radius, 72);
     wGeo.rotateX(-Math.PI / 2);
@@ -649,6 +669,12 @@ export function createTerrainScene(id, assets = {}) {
       uSkyRef: { value: new THREE.Color(...W.sky) },
       uCenter: { value: new THREE.Vector2(W.center.x, W.center.z) },
       uRadius: { value: W.radius },
+      // ripple/glitter frequencies were authored for the procedural scenes'
+      // 1-unit-per-metre world; at 0.1 upm a metre is a tenth of a unit
+      uRippleScale: { value: DEM ? 1 / (P.dem.unitsPerMeter * 10) : 1 },
+      // match the lit terrain's exposure — an unlit plane reads as a cutout
+      uWaterLight: { value: DEM ? (P.dem.waterLight ?? 0.55) : 1 },
+      uSkyLight: { value: DEM ? (P.dem.waterSkyLight ?? 0.42) : 1 },
     };
     const wMat = new THREE.ShaderMaterial({
       uniforms: wUniforms,
@@ -661,13 +687,13 @@ export function createTerrainScene(id, assets = {}) {
         }
       `,
       fragmentShader: /* glsl */ `
-        uniform float uTime, uRadius;
+        uniform float uTime, uRadius, uRippleScale, uWaterLight, uSkyLight;
         uniform vec3 uSunDir, uDeep, uShallow, uSkyRef;
         uniform vec2 uCenter;
         varying vec3 vWorld;
         ${NOISE_GLSL}
         void main() {
-          vec2 p = vWorld.xz * 0.22;
+          vec2 p = vWorld.xz * 0.22 * uRippleScale;
           // rippled micro-normal from two scrolling noise fields
           float e = 0.11;
           float n1 = fbm(p + vec2(uTime * 0.045, uTime * 0.028));
@@ -681,13 +707,14 @@ export function createTerrainScene(id, assets = {}) {
 
           vec3 view = normalize(cameraPosition - vWorld);
           float fres = pow(1.0 - max(dot(view, n), 0.0), 2.4);
-          vec3 col = mix(water, uSkyRef, fres * 0.62);
+          // grazing angles mirror the sky, steep ones show the water body
+          vec3 col = mix(water * uWaterLight, uSkyRef * uSkyLight, fres * 0.72);
 
-          // sun glitter — sharp, sparkling
+          // sun glitter — a narrow streak on the sun's side, not a sheet
           vec3 refl = reflect(-view, n);
-          float g = pow(max(dot(refl, uSunDir), 0.0), 480.0);
-          float sparkle = 0.5 + 0.5 * vnoise(vWorld.xz * 9.0 + uTime * 1.7);
-          col += vec3(1.0, 0.92, 0.75) * g * 3.2 * sparkle;
+          float g = pow(max(dot(refl, uSunDir), 0.0), 900.0);
+          float sparkle = 0.5 + 0.5 * vnoise(vWorld.xz * 9.0 * uRippleScale + uTime * 1.7);
+          col += vec3(1.0, 0.92, 0.75) * g * 1.6 * sparkle;
 
           // soft breathing shore line
           float rim = smoothstep(uRadius * 0.985, uRadius * 0.93, dC)
@@ -1007,6 +1034,7 @@ export function createTerrainScene(id, assets = {}) {
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
       vertexShader: /* glsl */ `
         attribute float aPhase;
         uniform float uTime;
@@ -1050,20 +1078,21 @@ export function createTerrainScene(id, assets = {}) {
     wingGeo.computeVertexNormals();
     const birdMat = new THREE.MeshBasicMaterial({ color: 0x1a1611, side: THREE.DoubleSide });
     const upm = DEM ? P.dem.unitsPerMeter : 1;
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < (DEM ? 4 : 7); i++) {
       const b = new THREE.Group();
       const wl = new THREE.Mesh(wingGeo, birdMat);
       wl.scale.x = -1;
       const wr = new THREE.Mesh(wingGeo, birdMat);
       b.add(wl, wr);
       if (DEM) {
-        // ~2m wingspan raptors circling between the camera and the focus
-        b.scale.setScalar((28 + Math.random() * 14) * upm);
-        const mid = new THREE.Vector3().lerpVectors(D.stand, D.anchors.lookRest, 0.35);
+        // the wing spans ~1.3 units at scale 1, and 1 unit is 1/upm metres —
+        // so this lands a believable 3–5m raptor, not a 20m glider
+        b.scale.setScalar((2.5 + Math.random() * 1.5) * upm);
+        const mid = new THREE.Vector3().lerpVectors(D.stand, D.anchors.lookRest, 0.45);
         b.userData = {
           cx: mid.x, cz: mid.z,
-          radius: (150 + Math.random() * 250) * upm,
-          height: D.stand.y + (20 + Math.random() * 120) * upm,
+          radius: (250 + Math.random() * 350) * upm,
+          height: D.stand.y + (60 + Math.random() * 180) * upm,
         };
       } else {
         b.scale.setScalar(0.8 + Math.random() * 0.5);
@@ -1116,6 +1145,7 @@ export function createTerrainScene(id, assets = {}) {
       depthWrite: false,
       side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
       vertexShader: /* glsl */ `
         uniform float uH;
         varying float vH;
@@ -1155,6 +1185,7 @@ export function createTerrainScene(id, assets = {}) {
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
       color: new THREE.Color(1.0, 0.8, 0.45),
       opacity: 0.55,
     });
@@ -1183,6 +1214,7 @@ export function createTerrainScene(id, assets = {}) {
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
       vertexShader: /* glsl */ `
         attribute float aPhase;
         uniform float uTime, uH;
@@ -1255,5 +1287,8 @@ export function createTerrainScene(id, assets = {}) {
   // travel lift needs to clear local terrain — scale with the scene's relief
   const liftHeight = DEM ? Math.max(D.peakY * 1.15, (D.zBack - D.zFront) * 0.2) : 260;
 
-  return { id, name: P.name, scene, update, anchors, beacons, hasWater: !!W, dem: D, csm, liftHeight };
+  // water audio applies to disc water and DEM lake masks alike
+  const hasWater = !!W || !!(DEM && P.dem.water);
+
+  return { id, name: P.name, scene, update, anchors, beacons, hasWater, dem: D, csm, liftHeight };
 }
