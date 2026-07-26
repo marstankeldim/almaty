@@ -7,7 +7,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { N8AOPass } from 'n8ao';
 import { loadGeo } from './geo.js';
 import { createGlobe } from './globe.js';
-import { createTerrainScene, presetDem } from './terrain.js';
+import { createTerrainScene, presetDem, demMeshSpec } from './terrain.js';
 import { loadDemGrid } from './dem.js';
 import { loadHdriEnvironment } from './assets.js';
 import { createDirector } from './director.js';
@@ -96,6 +96,46 @@ async function boot() {
   }
   await loadLocationAssets();
 
+  // Mesh heightfields off the main thread — inline meshing costs ~1.5s per
+  // location and froze the intro. Scenes still build synchronously; they just
+  // consume a ready payload when the worker has one.
+  function startGeometryWorker() {
+    let worker;
+    try {
+      worker = new Worker(new URL('./terrain-worker.js', import.meta.url), { type: 'module' });
+    } catch (e) {
+      console.warn(`[atlas] geometry worker unavailable (${e.message}) — meshing inline`);
+      return null;
+    }
+    const pending = new Map();
+    worker.onmessage = (e) => {
+      const { id, geo, ms, error } = e.data;
+      const resolve = pending.get(id);
+      pending.delete(id);
+      if (error) {
+        console.warn(`[atlas] worker failed for ${id} (${error}) — meshing inline`);
+        return resolve?.(null);
+      }
+      console.log(`[atlas] meshed ${id} in worker: ${ms.toFixed(0)}ms`);
+      resolve?.(geo);
+    };
+    worker.onerror = (e) => {
+      console.warn(`[atlas] geometry worker error (${e.message}) — meshing inline`);
+      for (const resolve of pending.values()) resolve(null);
+      pending.clear();
+    };
+    return {
+      mesh(id, spec) {
+        return new Promise((resolve) => {
+          pending.set(id, resolve);
+          // the grid is copied, not transferred — the sampler still needs it
+          worker.postMessage({ id, spec });
+        });
+      },
+      dispose: () => worker.terminate(),
+    };
+  }
+
   const scenes = {};
   function ensureScene(id) {
     if (!IMPLEMENTED.includes(id)) return null;
@@ -106,10 +146,30 @@ async function boot() {
     }
     return scenes[id];
   }
+
+  const geoWorker = startGeometryWorker();
+  async function premesh(id) {
+    const a = locationAssets[id];
+    if (!geoWorker || !a?.demGrid || a.geometry) return;
+    const spec = demMeshSpec(id, a.demGrid);
+    // the grid is copied into the worker, not transferred — the sampler
+    // on this side still needs it for anchors, water level and beacons
+    if (spec) a.geometry = await geoWorker.mesh(id, spec);
+  }
+
+  // home must be renderable on frame one (?scene=hero starts there)
+  await premesh(HOME);
   ensureScene(HOME);
-  // pre-build the rest while the globe intro plays
-  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 3000));
-  idle(() => IMPLEMENTED.forEach(ensureScene));
+
+  // the rest stream in behind the intro, one at a time to keep the worker cool
+  (async () => {
+    for (const id of IMPLEMENTED) {
+      if (scenes[id]) continue;
+      await premesh(id);
+      ensureScene(id);
+    }
+    geoWorker?.dispose();
+  })();
 
   const sound = createSoundscape();
   let ui;

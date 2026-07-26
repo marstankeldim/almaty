@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CSM } from 'three/addons/csm/CSM.js';
 import { LOCATIONS } from './locations.js';
+import { buildHeightfield } from './terrain-geometry.js';
 
 // ---------------------------------------------------------------------------
 // Deterministic 2D value noise (CPU) — heightfields & placement
@@ -121,7 +122,19 @@ function buildDemSampler(P, demGrid) {
     entryLook: new THREE.Vector3().lerpVectors(stand, look, 0.6),
   };
 
-  return { height, uvOf, sceneOf, heightAtUv, xMin, xMax, zFront, zBack, anchors, peak: best, peakY, stand };
+  // everything the pure mesher needs — shared by the worker and the inline path
+  const meshSpec = {
+    grid: demGrid.grid, gridW: demGrid.width, gridH: demGrid.height,
+    station: [uS, vS], elevStation, spanX, spanZ,
+    upm, vExag, deepen,
+    xMin, xMax, zFront, zBack,
+    segX: cfg.segX ?? 640, segZ: cfg.segZ ?? 440,
+  };
+
+  return {
+    height, uvOf, sceneOf, heightAtUv, xMin, xMax, zFront, zBack,
+    anchors, peak: best, peakY, stand, meshSpec,
+  };
 }
 
 const NOISE_GLSL = /* glsl */ `
@@ -356,6 +369,16 @@ export function presetDem(id) {
   return PRESETS[id]?.dem ?? null;
 }
 
+/**
+ * The meshing spec for a location, without building its scene — lets the
+ * caller precompute geometry in a worker before the scene is ever needed.
+ */
+export function demMeshSpec(id, demGrid) {
+  const P = PRESETS[id];
+  if (!P?.dem || !demGrid) return null;
+  return buildDemSampler(P, demGrid).meshSpec;
+}
+
 export function createTerrainScene(id, assets = {}) {
   const P = PRESETS[id];
   if (!P) throw new Error(`unknown location preset: ${id}`);
@@ -420,20 +443,18 @@ export function createTerrainScene(id, assets = {}) {
   // ---- real-DEM terrain (satellite-draped) ------------------------------------
   let csm = null;
   if (DEM) {
-    const geomW = D.xMax - D.xMin, geomD = D.zBack - D.zFront;
-    const cx = (D.xMax + D.xMin) / 2, cz = (D.zBack + D.zFront) / 2;
-    const segX = P.dem.segX ?? 640, segZ = P.dem.segZ ?? 440;
-    const g = new THREE.PlaneGeometry(geomW, geomD, segX, segZ);
-    g.rotateX(-Math.PI / 2);
-    g.translate(cx, 0, cz);
-    const pos = g.attributes.position, uvA = g.attributes.uv;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), z = pos.getZ(i);
-      pos.setY(i, D.height(x, z));
-      const [u, v] = D.uvOf(x, z);
-      uvA.setXY(i, u, 1 - v); // texture row 0 is south (flipY); DEM v=0 is north
-    }
-    g.computeVertexNormals();
+    // Prefer a worker-built payload; fall back to meshing inline if the
+    // worker hasn't finished (or isn't available) by the time we're needed.
+    const t0 = performance.now();
+    const built = assets.geometry ?? buildHeightfield(D.meshSpec);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(built.positions, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(built.uvs, 2));
+    g.setAttribute('normal', new THREE.BufferAttribute(built.normals, 3));
+    g.setIndex(new THREE.BufferAttribute(built.indices, 1));
+    g.computeBoundingSphere();
+    console.log(`[atlas]   ${id} geometry ${assets.geometry ? '(worker)' : '(inline)'}`
+      + ` assembled in ${(performance.now() - t0).toFixed(0)}ms`);
 
     // Physically-lit terrain: satellite albedo, real sun (cascaded shadows),
     // hemisphere sky/ground fill (stands in for HDRI IBL until M3).
