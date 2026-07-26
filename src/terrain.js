@@ -329,7 +329,7 @@ const PRESETS = {
     spruce: null,
     water: null,
     clouds: { count: 8, y: [140, 190], zRange: [-180, -430], xSpread: 700, opacity: [0.08, 0.16] },
-    dust: { count: 900, alpha: 2.0 },
+    dust: { count: 420, alpha: 0.9 },
     stand: { x: 56, z: 4, eye: 2.45 },
     lookRest: [0, -24, -320],
     entryPos: [-10, 120, 82],
@@ -343,14 +343,16 @@ const PRESETS = {
     dem: {
       station: [0.532, 0.751],  // on the rim above the deepest reach
       focus: [0.700, 0.645],    // gaze northeast along the trench
-      camAboveM: 120,           // clear the rim's own shoulder
-      lookLiftM: -40,           // tilt down into the canyon
+      camAboveM: 620,           // above the 1488m plateau, not inside its bowl
+      lookLiftM: -120,          // tilt down into the canyon
       unitsPerMeter: 0.1,
       vExag: 1.15,
       deepen: 1.9,          // restore the wall depth z14 sampling flattens
       saturation: 1.6,      // let the red strata burn
       gamma: 0.82,
-      bands: { freq: 2.2, strength: 0.5 },
+      // one band per ~20m of elevation; at 0.1 upm a unit is 10m, so the
+      // frequency is per-unit — 2.2 gave 4.5m bands that read as combing
+      bands: { freq: 0.5, strength: 0.32 },
       fogColor: [0.66, 0.48, 0.30],
       fogExp2: 0.00018,
       sunIntensity: 3.0,
@@ -471,9 +473,11 @@ export function createTerrainScene(id, assets = {}) {
     const waterMaskGlsl = wcfg ? `
       {
         float lvl = ${(D.heightAtUv(...wcfg.center) + 0.02).toFixed(4)};
-        float flat = smoothstep(0.55, 0.9, normalize(vNormal).y);
+        // 'flat' is a reserved GLSL ES 3.0 interpolation qualifier — naming a
+        // variable that silently breaks compilation on the GLSL3 code path
+        float flatness = smoothstep(0.55, 0.9, normalize(vNormal).y);
         float band = 1.0 - smoothstep(0.0, ${(wcfg.bandUnits ?? 1.2).toFixed(2)}, abs(vWpos.y - lvl));
-        float wet = flat * band;
+        float wet = flatness * band;
         if (wet > 0.01) {
           float rs = ${(1 / (P.dem.unitsPerMeter * 10)).toFixed(3)};
           vec2 wp = vWpos.xz * 2.2 * rs;

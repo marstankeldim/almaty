@@ -18,7 +18,10 @@ in-scene light beacons. The goal of the current milestone series is
 |---|---|
 | `src/main.js` | Boot, render loop, EffectComposer chain, lazy scene registry (`ensureScene`), beacon raycasting, adaptive pixel-ratio scaler, `window.__atlas` debug API |
 | `src/director.js` | Single camera + master timeline (`T` keypoints), travel choreography (`travelTo`), per-frame `params` consumed by everything |
-| `src/terrain.js` | Location factory: `PRESETS` (one recipe per destination — heightfield, palette, lighting, vegetation, water, beacons, camera anchors) → `createTerrainScene(id)` |
+| `src/terrain.js` | Location factory: `PRESETS` (one recipe per destination — heightfield, palette, lighting, vegetation, water, beacons, camera anchors) → `createTerrainScene(id, assets)`; a preset with a `dem` block renders real geography |
+| `src/dem.js` | Fetch + decode a stitched terrarium DEM; repairs SRTM voids/spikes |
+| `src/terrain-geometry.js` | Pure heightfield mesher (no three/DOM) — shared by the worker and the inline fallback |
+| `src/terrain-worker.js` | Module worker: meshes a heightfield and transfers the buffers back |
 | `src/globe.js` | Shader Earth (land/KZ/city-light masks), Kazakhstan awakening effect, orientation quaternions |
 | `src/geo.js` | TopoJSON → equirect mask canvas + KZ border ring |
 | `src/ui.js` | Title, HUD, constellation atlas SVG, beacon tooltips |
@@ -66,9 +69,43 @@ Codex cloud cannot take screenshots. Every task must be verifiable by:
 Branch naming: `codex/<task-number>-<slug>`. One task spec (`docs/tasks/NN-*.md`)
 per branch. Do not bundle unrelated changes.
 
-## Asset policy
+## Asset policy — fetch at build
 
 `public/assets/**` is **gitignored** (150–400MB). Committed instead:
 `assets.manifest.json` (urls, checksums, licenses) and `ATTRIBUTION.md`.
 Only public-domain / CC0 / CC-BY sources (NASA, AWS Terrain Tiles, EOX
 Sentinel-2 cloudless, PolyHaven). CC-BY requires an ATTRIBUTION.md entry.
+
+Assets are **fetched at build time, never committed**. Any deploy runs:
+
+```
+npm ci
+node scripts/fetch-assets.mjs          # populates public/assets/
+node scripts/fetch-assets.mjs --verify # checksums against the manifest
+npm run build
+```
+
+`scripts/fetch-assets.mjs` is idempotent (skips files whose sha256 matches the
+manifest), so repeat runs and warm CI caches cost nothing. Coverage per
+location lives in one place — the `DEM_LOCATIONS` table at the top of `run()`
+(bbox + zoom; zoom is chosen per feature scale, e.g. z12 for a whole range,
+z14 for a lake or gorge).
+
+**A missing asset is never fatal.** `loadDemGrid`, the satellite/HDRI loaders,
+and the globe textures all fall back (procedural terrain, hemisphere-only
+light, procedural globe) and warn once. A fresh clone runs without assets.
+
+## Performance notes
+
+- Heightfield meshing runs in a **worker** (`terrain-worker.js`); scenes still
+  build synchronously and mesh inline if a payload isn't ready. Inline meshing
+  costs ~1.5s per location, so keep the worker path healthy.
+- Normals come from a **smoothed** copy of the height field. The mesh is
+  sampled coarser than the DEM's pixels, and differentiating the raw bilinear
+  field flips normals into black streaks and terraces the shading.
+- Adaptive quality ladder (`applyQualityLevel` in main.js), shed in order:
+  AO → shadow resolution → device pixel ratio → MSAA. Drive it from
+  `window.__atlas.setQuality(0..4)` when testing.
+- **Avoid reserved GLSL identifiers in injected chunks** (`flat`, `sample`,
+  `input`, `output`, `filter`, …). GLSL ES 3.0 rejects them and the failure is
+  a silent non-compiling material.

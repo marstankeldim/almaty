@@ -70,14 +70,47 @@ export function buildHeightfield(spec) {
     }
   }
 
+  // Normals come from a SMOOTHED copy of the field, not the raw one: the mesh
+  // is sampled coarser than the DEM's own pixels, so bilinear interpolation
+  // leaves gradient discontinuities at every cell edge. Differentiating those
+  // directly flips normals away from the sun in thin streaks (reads as black
+  // scribbles) and terraces the shading into contour bands. Positions keep
+  // their full detail — only the shading basis is filtered.
+  let field = heights;
+  const passes = spec.normalSmooth ?? 2;
+  if (passes > 0) {
+    let src = heights, dst = new Float32Array(count);
+    for (let p = 0; p < passes; p++) {
+      // separable 1-2-1, clamped at the edges
+      for (let iz = 0; iz < nz; iz++) {
+        for (let ix = 0; ix < nx; ix++) {
+          const row = iz * nx;
+          dst[row + ix] = (src[row + Math.max(0, ix - 1)]
+            + 2 * src[row + ix]
+            + src[row + Math.min(nx - 1, ix + 1)]) * 0.25;
+        }
+      }
+      const tmp = src === heights ? new Float32Array(count) : src;
+      for (let iz = 0; iz < nz; iz++) {
+        for (let ix = 0; ix < nx; ix++) {
+          tmp[iz * nx + ix] = (dst[Math.max(0, iz - 1) * nx + ix]
+            + 2 * dst[iz * nx + ix]
+            + dst[Math.min(nz - 1, iz + 1) * nx + ix]) * 0.25;
+        }
+      }
+      src = tmp;
+    }
+    field = src;
+  }
+
   // central-difference normals; edges clamp to their neighbour
   for (let iz = 0; iz < nz; iz++) {
     for (let ix = 0; ix < nx; ix++) {
       const i = iz * nx + ix;
-      const l = heights[iz * nx + Math.max(0, ix - 1)];
-      const r = heights[iz * nx + Math.min(nx - 1, ix + 1)];
-      const b = heights[Math.max(0, iz - 1) * nx + ix];
-      const f = heights[Math.min(nz - 1, iz + 1) * nx + ix];
+      const l = field[iz * nx + Math.max(0, ix - 1)];
+      const r = field[iz * nx + Math.min(nx - 1, ix + 1)];
+      const b = field[Math.max(0, iz - 1) * nx + ix];
+      const f = field[Math.min(nz - 1, iz + 1) * nx + ix];
       // z decreases as iz grows, so the forward difference flips sign
       const nX = (l - r) / (2 * dx);
       const nZ = (f - b) / (2 * dz);
@@ -88,12 +121,15 @@ export function buildHeightfield(spec) {
     }
   }
 
+  // Winding must make the surface face +Y: rows advance toward -Z, so
+  // a→b2→c gives (dx,0,0) x (0,0,-dz) = +Y. The mirror order faces down and
+  // the whole terrain gets backface-culled into slivers.
   let t = 0;
   for (let iz = 0; iz < segZ; iz++) {
     for (let ix = 0; ix < segX; ix++) {
       const a = iz * nx + ix, b2 = a + 1, c = a + nx, d = c + 1;
-      indices[t++] = a; indices[t++] = c; indices[t++] = b2;
-      indices[t++] = b2; indices[t++] = c; indices[t++] = d;
+      indices[t++] = a; indices[t++] = b2; indices[t++] = c;
+      indices[t++] = b2; indices[t++] = d; indices[t++] = c;
     }
   }
 

@@ -322,13 +322,55 @@ async function boot() {
   // ---- loop ----------------------------------------------------------------------
   const clock = new THREE.Clock();
   let wall = 0;
-  const stats = { ema: 16, fps: 60, pixelRatio: renderer.getPixelRatio(), frames: 0, aoQuality: true };
+  const MAX_PR = Math.min(window.devicePixelRatio, 2);
+  const stats = {
+    ema: 16, fps: 60, pixelRatio: renderer.getPixelRatio(), frames: 0,
+    aoQuality: true, level: 0, shadowMapSize: 2048, msaa: 4,
+  };
 
   function setPixelRatio(pr) {
     stats.pixelRatio = pr;
     renderer.setPixelRatio(pr);
     renderer.setSize(viewW(), viewH());
     composer.setSize(viewW(), viewH());
+  }
+
+  function setShadowMapSize(size) {
+    if (stats.shadowMapSize === size) return;
+    stats.shadowMapSize = size;
+    for (const s of Object.values(scenes)) {
+      if (!s.csm) continue;
+      s.csm.shadowMapSize = size;
+      for (const l of s.csm.lights) {
+        l.shadow.mapSize.setScalar(size);
+        // dropping the allocated map forces three to rebuild it at the new size
+        l.shadow.map?.dispose();
+        l.shadow.map = null;
+      }
+    }
+  }
+
+  function setMsaa(samples) {
+    if (stats.msaa === samples) return;
+    stats.msaa = samples;
+    for (const rt of [composer.renderTarget1, composer.renderTarget2]) {
+      rt.samples = samples;
+      rt.dispose(); // reallocated on next bind with the new sample count
+    }
+  }
+
+  /**
+   * Quality ladder, shed in this order and restored in reverse. Structure of
+   * the image is preserved as long as possible: occlusion and shadow crispness
+   * go before resolution, and geometric anti-aliasing goes last.
+   *   0 full · 1 no AO · 2 soft shadows · 3 lower DPR · 4 no MSAA
+   */
+  function applyQualityLevel(level) {
+    stats.level = level = Math.max(0, Math.min(4, level));
+    stats.aoQuality = level < 1;
+    setShadowMapSize(level < 2 ? 2048 : 1024);
+    setPixelRatio(level < 3 ? MAX_PR : 1.0);
+    setMsaa(level < 4 ? 4 : 0);
   }
 
   function frame(dt) {
@@ -389,16 +431,11 @@ async function boot() {
       if (ms < 250) { // ignore tab-switch stalls
         stats.ema = stats.ema * 0.95 + ms * 0.05;
         stats.fps = 1000 / stats.ema;
+        // Re-judge every ~2s. Recovery needs a wider margin than degradation
+        // so a tier that costs ~4ms can't oscillate on and off every window.
         if (++stats.frames % 120 === 0) {
-          // quality ladder: shed AO first, then resolution; restore in reverse
-          const maxPr = Math.min(window.devicePixelRatio, 2);
-          if (stats.ema > 22) {
-            if (stats.aoQuality) stats.aoQuality = false;
-            else if (stats.pixelRatio > 1.0) setPixelRatio(Math.max(1.0, stats.pixelRatio - 0.25));
-          } else if (stats.ema < 13) {
-            if (stats.pixelRatio < maxPr) setPixelRatio(Math.min(maxPr, stats.pixelRatio + 0.25));
-            else stats.aoQuality = true;
-          }
+          if (stats.ema > 22 && stats.level < 4) applyQualityLevel(stats.level + 1);
+          else if (stats.ema < 12 && stats.level > 0) applyQualityLevel(stats.level - 1);
         }
       }
     }
@@ -410,6 +447,7 @@ async function boot() {
   window.__atlas = {
     director,
     stats,
+    setQuality: applyQualityLevel,
     post: { composer, renderPass, aoPass, bloomPass, gradePass },
     step: (dt = 1 / 30) => frame(dt),
     travelTo: (id) => director.travelTo(id),
