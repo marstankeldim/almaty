@@ -91,7 +91,29 @@ async function boot() {
             return null;
           });
       }
-      locationAssets[id] = { demGrid, satelliteTex, envMap };
+      // Tiling detail plates. flipY MUST be false: the shader projects from
+      // world XZ, so image +V has to align with world +Z or the relief reads
+      // as dents instead of bumps.
+      let plates = null;
+      if (dem.plates) {
+        const loadPlate = (map, colorSpace = THREE.NoColorSpace) => new Promise((res) => texLoader.load(
+          `/assets/pbr/${dem.plates.set}/${map}.jpg`,
+          (t) => {
+            t.colorSpace = colorSpace;
+            t.wrapS = t.wrapT = THREE.RepeatWrapping;
+            t.flipY = false;
+            t.anisotropy = 8;
+            res(t);
+          },
+          undefined, () => res(null),
+        ));
+        const [albedo, normal, roughness] = await Promise.all([
+          loadPlate('albedo', THREE.SRGBColorSpace), loadPlate('normal'), loadPlate('roughness'),
+        ]);
+        if (albedo && normal && roughness) plates = { albedo, normal, roughness };
+        else console.warn(`[atlas] detail plates for '${id}' unavailable — satellite only`);
+      }
+      locationAssets[id] = { demGrid, satelliteTex, envMap, plates };
     }
   }
   await loadLocationAssets();
@@ -325,7 +347,7 @@ async function boot() {
   const MAX_PR = Math.min(window.devicePixelRatio, 2);
   const stats = {
     ema: 16, fps: 60, pixelRatio: renderer.getPixelRatio(), frames: 0,
-    aoQuality: true, level: 0, shadowMapSize: 2048, msaa: 4, detail: 1,
+    aoQuality: true, level: 0, shadowMapSize: 2048, msaa: 4, detail: 1, plates: 1,
   };
 
   function setPixelRatio(pr) {
@@ -368,7 +390,11 @@ async function boot() {
     setPixelRatio(level < 3 ? MAX_PR : (level < 4 ? 1.0 : 0.75));
     // mesoscale detail is pure ALU — cheap enough to keep until the last tier
     stats.detail = level < 4 ? 1 : 0;
-    for (const s of Object.values(scenes)) s.setDetail?.(stats.detail);
+    stats.plates = level < 2 ? 1 : 0;
+    for (const s of Object.values(scenes)) {
+      s.setDetail?.(stats.detail);
+      s.setPlates?.(stats.plates);
+    }
   }
 
   function frame(dt) {

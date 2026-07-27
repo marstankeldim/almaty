@@ -308,7 +308,12 @@ const PRESETS = {
       // 2507.2m — 1.2m above the water — with only 0.2m of relief within
       // ±25m, so a 1.7m eye cannot be buried by a neighbouring mesh vertex
       // (quads here span ~14m), and open water due south for 400m.
-      station: [0.570, 0.688],
+      // A low bluff 10m above the water, not the beach. The beach is only 1m
+      // above a lake surface whose own DEM pixels span 4.5m (2503.5-2508.0),
+      // so no threshold could hold it dry without punching holes in the lake.
+      // 10m of margin clears that noise and yields 154m of dry foreground
+      // before the water — which is what the detail plates need to land on.
+      station: [0.593, 0.622],
       // Bearing scan from that station: SE has the longest water (838m) but
       // only 2603m hills behind it, while SW crosses 237m of water into a
       // 3356m wall standing 24.6deg above the eye at 1850m. Took the wall.
@@ -323,6 +328,14 @@ const PRESETS = {
       hemiWithEnv: 0.05,
       // nearest visible ground ~442m, median ~3.4 m/px
       detail: { coarseM: 260, fineM: 90, fadeM: 3200, albedo: 0.13, rough: 0.22 },
+      // Only vantage with a real near field (a 1.7m eye on the shore), so the
+      // only one that earns photographic plates. tileM is gray_rocks' actual
+      // 1.8m capture span: at 1024px that is 1.8mm/texel, still above the
+      // pixel footprint out to ~50m, which is what fadeM tracks.
+      plates: {
+        set: 'scree', tileM: 1.8, fadeM: 80,
+        normal: 0.55, rough: 0.8, albedo: 0.85, albedoMean: 0.17663,
+      },
       hdri: '/assets/hdri/morning-alpine-4k.hdr',
       envIntensity: 0.22,
       envYaw: 0,
@@ -331,6 +344,10 @@ const PRESETS = {
       water: {
         center: [0.586, 0.714], radiusM: 330,
         swellM: 45, chopM: 2.6, chopFadeM: 90, rippleAmp: 2.0, roughness: 0.14,
+        // ±5m: wide enough to cover the lake surface's own 4.5m of DEM
+        // noise, tight enough to leave a bluff 10m above it dry. The default
+        // ±12m was written for a vantage 95m up and floods the shore.
+        bandUnits: 0.5,
       },
     },
   },
@@ -436,6 +453,10 @@ export function createTerrainScene(id, assets = {}) {
     uAlpenglow: { value: P.palette.alpenglow },
     uBands: { value: P.palette.bands || 0 },
     uDetail: { value: 1 },
+    uPlateA: { value: null },
+    uPlateN: { value: null },
+    uPlateR: { value: null },
+    uPlate: { value: 1 },
   };
 
   // ---- sky dome -------------------------------------------------------------
@@ -504,6 +525,28 @@ export function createTerrainScene(id, assets = {}) {
       rough: dcfg.rough,
     } : null;
 
+    // Photographic micro-relief for vantages that actually have a near field.
+    // tileM is the texture's real-world capture span, so the plate lands at
+    // life size; fadeM is where it stops exceeding the pixel footprint.
+    const pcfg = P.dem.plates;
+    const plates = pcfg && assets.plates ? {
+      inv: 1 / (pcfg.tileM * P.dem.unitsPerMeter),
+      fade: 1 / (pcfg.fadeM * P.dem.unitsPerMeter),
+      normal: pcfg.normal,
+      rough: pcfg.rough,
+      albedo: pcfg.albedo ?? 0,
+      // true LINEAR mean luminance of the plate, measured offline. Dividing
+      // by it makes the albedo term exposure-neutral by construction; reading
+      // the mean from a 1x1 mip instead would be both non-portable (LOD bias
+      // is clamped to as little as 2.0) and biased upward by sRGB filtering.
+      mean: pcfg.albedoMean ?? 1,
+    } : null;
+    if (plates) {
+      uniforms.uPlateA.value = assets.plates.albedo;
+      uniforms.uPlateN.value = assets.plates.normal;
+      uniforms.uPlateR.value = assets.plates.roughness;
+    }
+
     // A real lake is already in the satellite drape and already flat in the
     // DEM — so shade water where the terrain IS water (level + flat) instead
     // of floating a disc that can't match its shape. Ripples ride the surface
@@ -560,6 +603,12 @@ export function createTerrainScene(id, assets = {}) {
     const gradeShader = (shader) => {
       if (wcfg) shader.uniforms.uWaterTime = uniforms.uTime;
       if (det) shader.uniforms.uDetail = uniforms.uDetail;
+      if (plates) {
+        shader.uniforms.uPlateA = uniforms.uPlateA;
+        shader.uniforms.uPlateN = uniforms.uPlateN;
+        shader.uniforms.uPlateR = uniforms.uPlateR;
+        shader.uniforms.uPlate = uniforms.uPlate;
+      }
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vWpos;')
         .replace('#include <begin_vertex>',
@@ -567,7 +616,8 @@ export function createTerrainScene(id, assets = {}) {
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           varying vec3 vWpos;
-          ${det ? 'float gDetail = 0.0;\n          float gSnow = 0.0;' : ''}
+          ${det || plates ? 'float gDetail = 0.0;\n          float gSnow = 0.0;' : ''}
+          ${plates ? 'uniform sampler2D uPlateA;\n          uniform sampler2D uPlateN;\n          uniform sampler2D uPlateR;\n          uniform float uPlate;' : ''}
           ${det ? 'uniform float uDetail;' : ''}
           ${wcfg ? 'uniform float uWaterTime;' : ''}
           float h21(vec2 p){p=fract(p*vec2(234.34,435.345));p+=dot(p,p+34.23);return fract(p.x*p.y);}
@@ -609,6 +659,21 @@ export function createTerrainScene(id, assets = {}) {
             // roughness path, where a specular lift feeds the bloom threshold
             gSnow = smoothstep(0.55, 0.82, lum);
             ` : ''}
+            ${plates && !det ? 'gSnow = smoothstep(0.55, 0.82, lum);' : ''}
+            ${plates && plates.albedo > 0 ? `
+            // Texture variation is what the eye actually reads on flat, bright
+            // near ground — shading alone measured as a 1.7% contrast change.
+            // Ratio against the baked linear mean keeps overall exposure put.
+            {
+              float paF = exp(-length(vWpos - cameraPosition) * ${plates.fade.toFixed(5)}) * uPlate;
+              if (paF > 0.02) {
+                vec3 pa = texture2D(uPlateA, vWpos.xz * ${plates.inv.toFixed(4)}).rgb;
+                float paL = dot(pa, vec3(0.2126, 0.7152, 0.0722)) / ${plates.mean.toFixed(5)};
+                diffuseColor.rgb *= mix(1.0, clamp(paL, 0.55, 1.75),
+                                        paF * ${plates.albedo.toFixed(3)} * (1.0 - gSnow));
+              }
+            }
+            ` : ''}
           }`)
         .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
           ${det ? `
@@ -618,6 +683,16 @@ export function createTerrainScene(id, assets = {}) {
           roughnessFactor = clamp(
             roughnessFactor * (1.0 + gDetail * ${det.rough.toFixed(3)} * (1.0 - gSnow)),
             0.06, 1.0);
+          ` : ''}
+          ${plates ? `
+          {
+            float pF = exp(-length(vWpos - cameraPosition) * ${plates.fade.toFixed(5)}) * uPlate;
+            if (pF > 0.02) {
+              float pr = texture2D(uPlateR, vWpos.xz * ${plates.inv.toFixed(4)}).g;
+              roughnessFactor = clamp(mix(roughnessFactor,
+                roughnessFactor * (0.72 + 0.56 * pr), pF * ${plates.rough.toFixed(3)}), 0.06, 1.0);
+            }
+          }
           ` : ''}`)
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           {
@@ -627,6 +702,21 @@ export function createTerrainScene(id, assets = {}) {
             float hl = fbmT((vWpos.xz - vec2(e, 0.0)) * s), hr = fbmT((vWpos.xz + vec2(e, 0.0)) * s);
             float hd = fbmT((vWpos.xz - vec2(0.0, e)) * s), hu = fbmT((vWpos.xz + vec2(0.0, e)) * s);
             normal = normalize(normal + vec3((hl - hr) * amp, 0.0, (hd - hu) * amp));
+            ${plates ? `
+            // Photographic micro-relief. Colour deliberately comes only from
+            // the satellite: sampling a detail albedo would reintroduce an
+            // sRGB mip bias and a distance-keyed exposure shift.
+            {
+              float pF = exp(-length(vWpos - cameraPosition) * ${plates.fade.toFixed(5)}) * uPlate;
+              if (pF > 0.02) {
+                vec3 pn = texture2D(uPlateN, vWpos.xz * ${plates.inv.toFixed(4)}).xyz * 2.0 - 1.0;
+                // world-XZ planar projection, so tangent space maps straight
+                // onto world X/Z (loader sets flipY=false to fix the V sign)
+                normal = normalize(normal
+                  + vec3(pn.x, 0.0, pn.y) * ${plates.normal.toFixed(3)} * pF * (1.0 - gSnow));
+              }
+            }
+            ` : ''}
             ${waterMaskGlsl}
           }`);
     };
@@ -1423,6 +1513,7 @@ export function createTerrainScene(id, assets = {}) {
   const hasWater = !!W || !!(DEM && P.dem.water);
 
   const setDetail = (v) => { uniforms.uDetail.value = v; };
+  const setPlates = (v) => { uniforms.uPlate.value = v; };
 
-  return { id, name: P.name, scene, update, anchors, beacons, hasWater, dem: D, csm, liftHeight, setDetail };
+  return { id, name: P.name, scene, update, anchors, beacons, hasWater, dem: D, csm, liftHeight, setDetail, setPlates };
 }
