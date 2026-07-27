@@ -77,9 +77,14 @@ async function boot() {
       if (!dem) continue;
       const demGrid = await loadDemGrid(id);
       if (!demGrid) continue;
+      // Anisotropy 2, not 8: these vantages look along the terrain, so the
+      // far range is sampled at footprint ratios far beyond 8 taps. The GPU
+      // then picks its mip from the minor axis and aliases along the major
+      // one, which showed as horizontal streaks smeared across the slopes.
+      // A lower cap forces a blurrier, correct mip at grazing incidence.
       const satelliteTex = await new Promise((res) => texLoader.load(
         `/assets/satellite/${id}.jpg`,
-        (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; res(t); },
+        (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 2; res(t); },
         undefined, () => res(null),
       ));
       let envMap = null;

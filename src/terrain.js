@@ -334,10 +334,17 @@ const PRESETS = {
       // pixel footprint out to ~50m, which is what fadeM tracks.
       plates: {
         set: 'scree', tileM: 1.8, fadeM: 80,
-        normal: 0.55, rough: 0.8, albedo: 0.85, albedoMean: 0.17663,
+        normal: 0.55, rough: 0.8, albedo: 0.7, albedoMean: 0.17663,
       },
       hdri: '/assets/hdri/morning-alpine-4k.hdr',
-      envIntensity: 0.22,
+      // 0.22 flooded the scene with flat sky fill and killed the contrast the
+      // sun+shadow pass had earned; this vantage looks along a lit slope where
+      // that fill has nothing to reveal.
+      envIntensity: 0.07,
+      // Sentinel-2 pixels already bake in their own illumination, so relighting
+      // them saturates once ground is close and facing up. The distant terrain
+      // never showed it; the shoreline foreground did.
+      albedoScale: 0.68,
       envYaw: 0,
       shadowFar: 1000,
       segX: 583, segZ: 558,
@@ -633,6 +640,7 @@ export function createTerrainScene(id, assets = {}) {
             float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
             diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, ${(P.dem.saturation ?? 1.16).toFixed(3)});
             diffuseColor.rgb = pow(max(diffuseColor.rgb, 0.0), vec3(${(P.dem.gamma ?? 0.90).toFixed(3)}));
+            diffuseColor.rgb *= ${(P.dem.albedoScale ?? 1).toFixed(3)};
             ${P.dem.bands ? `
             // sedimentary strata: horizontal layer tints on steep faces only
             float steep = smoothstep(0.85, 0.55, normalize(vNormal).y);
@@ -669,7 +677,10 @@ export function createTerrainScene(id, assets = {}) {
               if (paF > 0.02) {
                 vec3 pa = texture2D(uPlateA, vWpos.xz * ${plates.inv.toFixed(4)}).rgb;
                 float paL = dot(pa, vec3(0.2126, 0.7152, 0.0722)) / ${plates.mean.toFixed(5)};
-                diffuseColor.rgb *= mix(1.0, clamp(paL, 0.55, 1.75),
+                // clamp kept symmetric about 1.0 — the old [0.55, 1.75] let
+                // the ratio brighten far more than it could darken, which put
+                // a net lift on exactly the near ground it was meant to texture
+                diffuseColor.rgb *= mix(1.0, clamp(paL, 0.62, 1.38),
                                         paF * ${plates.albedo.toFixed(3)} * (1.0 - gSnow));
               }
             }
