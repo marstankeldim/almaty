@@ -325,7 +325,7 @@ async function boot() {
   const MAX_PR = Math.min(window.devicePixelRatio, 2);
   const stats = {
     ema: 16, fps: 60, pixelRatio: renderer.getPixelRatio(), frames: 0,
-    aoQuality: true, level: 0, shadowMapSize: 2048, msaa: 4,
+    aoQuality: true, level: 0, shadowMapSize: 2048, msaa: 4, detail: 1,
   };
 
   function setPixelRatio(pr) {
@@ -350,27 +350,25 @@ async function boot() {
     }
   }
 
-  function setMsaa(samples) {
-    if (stats.msaa === samples) return;
-    stats.msaa = samples;
-    for (const rt of [composer.renderTarget1, composer.renderTarget2]) {
-      rt.samples = samples;
-      rt.dispose(); // reallocated on next bind with the new sample count
-    }
-  }
+  // MSAA is deliberately NOT in the ladder. Toggling it means disposing the
+  // composer's render targets mid-session, and the reallocated pair stops
+  // being cleared — previous scenes bleed through as composited garbage.
+  // The sample count is worth far less than the last DPR step anyway.
 
   /**
    * Quality ladder, shed in this order and restored in reverse. Structure of
    * the image is preserved as long as possible: occlusion and shadow crispness
    * go before resolution, and geometric anti-aliasing goes last.
-   *   0 full · 1 no AO · 2 soft shadows · 3 lower DPR · 4 no MSAA
+   *   0 full · 1 no AO · 2 soft shadows · 3 lower DPR · 4 lowest DPR + no detail
    */
   function applyQualityLevel(level) {
     stats.level = level = Math.max(0, Math.min(4, level));
     stats.aoQuality = level < 1;
     setShadowMapSize(level < 2 ? 2048 : 1024);
-    setPixelRatio(level < 3 ? MAX_PR : 1.0);
-    setMsaa(level < 4 ? 4 : 0);
+    setPixelRatio(level < 3 ? MAX_PR : (level < 4 ? 1.0 : 0.75));
+    // mesoscale detail is pure ALU — cheap enough to keep until the last tier
+    stats.detail = level < 4 ? 1 : 0;
+    for (const s of Object.values(scenes)) s.setDetail?.(stats.detail);
   }
 
   function frame(dt) {
@@ -447,7 +445,9 @@ async function boot() {
   window.__atlas = {
     director,
     stats,
+    scenes,
     setQuality: applyQualityLevel,
+    setDetail: (v) => { for (const s of Object.values(scenes)) s.setDetail?.(v); },
     post: { composer, renderPass, aoPass, bloomPass, gradePass },
     step: (dt = 1 / 30) => frame(dt),
     travelTo: (id) => director.travelTo(id),

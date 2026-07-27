@@ -243,6 +243,8 @@ const PRESETS = {
       fogExp2: 0.00024,       // MeshStandard FogExp2 for the lit DEM
       sunIntensity: 3.1,
       hemi: 1.15,             // no-IBL fallback fill
+      // nearest visible ground ~3235m: only very large features resolve
+      detail: { coarseM: 900, fineM: 320, fadeM: 9000, albedo: 0.14, rough: 0.20 },
       hdri: '/assets/hdri/sunrise-mountain-4k.hdr',
       envIntensity: 0.18,     // subtle fill — the CSM sun stays the key light
       envYaw: 0,              // rotate HDRI sun to match sunDir (look-dev)
@@ -302,6 +304,8 @@ const PRESETS = {
       fogExp2: 0.00012,
       sunIntensity: 2.8,
       hemiWithEnv: 0.05,
+      // nearest visible ground ~442m, median ~3.4 m/px
+      detail: { coarseM: 260, fineM: 90, fadeM: 3200, albedo: 0.13, rough: 0.22 },
       hdri: '/assets/hdri/morning-alpine-4k.hdr',
       envIntensity: 0.22,
       envYaw: 0,
@@ -348,8 +352,8 @@ const PRESETS = {
       unitsPerMeter: 0.1,
       vExag: 1.15,
       deepen: 1.9,          // restore the wall depth z14 sampling flattens
-      saturation: 1.6,      // let the red strata burn
-      gamma: 0.82,
+      saturation: 1.22,     // retuned once the cache-key fix made it apply
+      gamma: 0.9,
       // one band per ~20m of elevation; at 0.1 upm a unit is 10m, so the
       // frequency is per-unit — 2.2 gave 4.5m bands that read as combing
       bands: { freq: 0.5, strength: 0.32 },
@@ -357,6 +361,8 @@ const PRESETS = {
       fogExp2: 0.00018,
       sunIntensity: 3.0,
       hemiWithEnv: 0.06,
+      // nearest visible ground ~1282m and terrain fills ~46% of frame
+      detail: { coarseM: 420, fineM: 150, fadeM: 5200, albedo: 0.17, rough: 0.26 },
       hdri: '/assets/hdri/afternoon-desert-4k.hdr',
       envIntensity: 0.25,
       envYaw: 0,
@@ -409,6 +415,7 @@ export function createTerrainScene(id, assets = {}) {
     uSnowLine: { value: P.palette.snowLine },
     uAlpenglow: { value: P.palette.alpenglow },
     uBands: { value: P.palette.bands || 0 },
+    uDetail: { value: 1 },
   };
 
   // ---- sky dome -------------------------------------------------------------
@@ -465,6 +472,18 @@ export function createTerrainScene(id, assets = {}) {
       roughness: 0.97,
       metalness: 0.0,
     });
+    // Mesoscale detail is specified in METRES and converted to scene units
+    // here, so the same numbers mean the same thing at any unitsPerMeter.
+    // detailQuality 0 drops it entirely (quality ladder / weak GPUs).
+    const dcfg = P.dem.detail;
+    const det = dcfg ? {
+      f0: 1 / (dcfg.coarseM * P.dem.unitsPerMeter),
+      f1: 1 / (dcfg.fineM * P.dem.unitsPerMeter),
+      fade: 1 / (dcfg.fadeM * P.dem.unitsPerMeter),
+      albedo: dcfg.albedo,
+      rough: dcfg.rough,
+    } : null;
+
     // A real lake is already in the satellite drape and already flat in the
     // DEM — so shade water where the terrain IS water (level + flat) instead
     // of floating a disc that can't match its shape. Ripples ride the surface
@@ -479,14 +498,24 @@ export function createTerrainScene(id, assets = {}) {
         float band = 1.0 - smoothstep(0.0, ${(wcfg.bandUnits ?? 1.2).toFixed(2)}, abs(vWpos.y - lvl));
         float wet = flatness * band;
         if (wet > 0.01) {
-          float rs = ${(1 / (P.dem.unitsPerMeter * 10)).toFixed(3)};
-          vec2 wp = vWpos.xz * 2.2 * rs;
-          float we = 0.09;
-          float w0 = fbmT(wp + vec2(uWaterTime * 0.05, uWaterTime * 0.03));
-          float wx = fbmT(wp + vec2(we, 0.0) + vec2(uWaterTime * 0.05, uWaterTime * 0.03)) - w0;
-          float wz = fbmT(wp + vec2(0.0, we) + vec2(uWaterTime * 0.05, uWaterTime * 0.03)) - w0;
-          normal = normalize(mix(normal, normalize(vec3(wx * 9.0, 1.0, wz * 9.0)), wet));
-          roughnessFactor = mix(roughnessFactor, 0.045, wet);
+          // The nearest water is ~440m out, where one pixel spans several
+          // metres. Ripples shorter than that footprint cannot be resolved —
+          // they alias into salt-and-pepper specular and blow through the
+          // bloom threshold. So: long swell only, damped further with
+          // distance, and a roughness floor that keeps the highlight broad
+          // rather than mirror-sharp.
+          float wUnitsPerM = ${P.dem.unitsPerMeter.toFixed(4)};
+          float wSwell = 1.0 / (${(wcfg.swellM ?? 45).toFixed(1)} * wUnitsPerM);
+          vec2 wp = vWpos.xz * wSwell;
+          float we = 0.12;
+          vec2 wDrift = vec2(uWaterTime * 0.012, uWaterTime * 0.007);
+          float w0 = fbmT(wp + wDrift);
+          float wx = fbmT(wp + vec2(we, 0.0) + wDrift) - w0;
+          float wz = fbmT(wp + vec2(0.0, we) + wDrift) - w0;
+          float wNear = exp(-length(vWpos - cameraPosition) * ${((wcfg.rippleFadeM ? 1 / (wcfg.rippleFadeM * P.dem.unitsPerMeter) : 0.0016)).toFixed(6)});
+          float wAmp = ${(wcfg.rippleAmp ?? 2.2).toFixed(2)} * wNear;
+          normal = normalize(mix(normal, normalize(vec3(wx * wAmp, 1.0, wz * wAmp)), wet));
+          roughnessFactor = mix(roughnessFactor, ${(wcfg.roughness ?? 0.16).toFixed(3)}, wet);
         }
       }` : '';
 
@@ -494,6 +523,7 @@ export function createTerrainScene(id, assets = {}) {
     // DEM tessellation loses; chained AFTER CSM's uniform injection
     const gradeShader = (shader) => {
       if (wcfg) shader.uniforms.uWaterTime = uniforms.uTime;
+      if (det) shader.uniforms.uDetail = uniforms.uDetail;
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vWpos;')
         .replace('#include <begin_vertex>',
@@ -501,10 +531,17 @@ export function createTerrainScene(id, assets = {}) {
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           varying vec3 vWpos;
+          ${det ? 'float gDetail = 0.0;\n          float gSnow = 0.0;' : ''}
+          ${det ? 'uniform float uDetail;' : ''}
           ${wcfg ? 'uniform float uWaterTime;' : ''}
           float h21(vec2 p){p=fract(p*vec2(234.34,435.345));p+=dot(p,p+34.23);return fract(p.x*p.y);}
           float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h21(i),h21(i+vec2(1,0)),f.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),f.x),f.y);}
-          float fbmT(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*vn(p);p=p*2.1+13.;a*=.5;}return v;}`)
+          float fbmT(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*vn(p);p=p*2.1+13.;a*=.5;}return v;}
+          // Decorrelated companion field. The relief, the strata jitter and the
+          // detail mask all ride the same fbmT lattice; without a rotation AND
+          // a domain offset their octaves co-locate and read as one camo layer.
+          const mat2 DET_ROT = mat2(0.8112, -0.5847, 0.5847, 0.8112);
+          float fbmD(vec2 p){ return fbmT(DET_ROT * p + vec2(137.31, 61.07)); }`)
         .replace('#include <map_fragment>', `#include <map_fragment>
           {
             float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
@@ -517,7 +554,35 @@ export function createTerrainScene(id, assets = {}) {
             float lr = h21(vec2(layer, 7.0));
             diffuseColor.rgb *= mix(1.0, mix(${(1 - P.dem.bands.strength / 2).toFixed(3)}, ${(1 + P.dem.bands.strength / 2).toFixed(3)}, lr), steep);
             ` : ''}
+            ${det ? `
+            // Mesoscale material break-up. Ray-marching the settled cameras
+            // against the real DEMs put the nearest visible ground at 442m
+            // (lake), 1282m (canyon) and 3235m (range): metre-scale photo
+            // plates would sit at mip 7-12 — a 4x4 image — and contribute
+            // nothing. So the budget goes to the 20-200m band that is on
+            // screen, as two decorrelated octaves with zero texture fetches.
+            float dM = fbmD(vWpos.xz * ${det.f0.toFixed(5)})
+                     + 0.45 * fbmD(vWpos.xz * ${det.f1.toFixed(5)} + 41.7);
+            dM = (dM / 1.45 - 0.5) * 2.0;               // ~[-1,1], mean 0
+            float dFade = exp(-length(vWpos - cameraPosition) * ${det.fade.toFixed(6)});
+            float dW = dM * dFade * uDetail;
+            // exposure-neutral: brightens and darkens equally about the mean
+            diffuseColor.rgb *= 1.0 + dW * ${det.albedo.toFixed(3)};
+            gDetail = dW;
+            // bright satellite pixels are snow/glacier: keep them off the
+            // roughness path, where a specular lift feeds the bloom threshold
+            gSnow = smoothstep(0.55, 0.82, lum);
+            ` : ''}
           }`)
+        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+          ${det ? `
+          // matching micro-roughness: rougher in the hollows, tighter on the
+          // crests. Clamped to 1.0 — GGX alpha = roughness^2 is invalid above
+          // it and reads as a flat dark wash rather than "rougher".
+          roughnessFactor = clamp(
+            roughnessFactor * (1.0 + gDetail * ${det.rough.toFixed(3)} * (1.0 - gSnow)),
+            0.06, 1.0);
+          ` : ''}`)
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           {
             float d = length(vWpos - cameraPosition);
@@ -581,6 +646,12 @@ export function createTerrainScene(id, assets = {}) {
     } else {
       terrMat.onBeforeCompile = gradeShader;
     }
+    // three keys the program cache on onBeforeCompile.toString() — the source
+    // TEXT, which is identical for every location because the per-preset
+    // values live in captured variables, not in the source. Without this the
+    // second and third DEM materials silently reuse the first one's compiled
+    // program, so their grade constants, strata bands and water mask never run.
+    terrMat.customProgramCacheKey = () => `dem-${id}`;
 
     scene.fog = new THREE.FogExp2(new THREE.Color(...fogColor), P.dem.fogExp2 ?? 0.00028);
   } else {
@@ -1315,5 +1386,7 @@ export function createTerrainScene(id, assets = {}) {
   // water audio applies to disc water and DEM lake masks alike
   const hasWater = !!W || !!(DEM && P.dem.water);
 
-  return { id, name: P.name, scene, update, anchors, beacons, hasWater, dem: D, csm, liftHeight };
+  const setDetail = (v) => { uniforms.uDetail.value = v; };
+
+  return { id, name: P.name, scene, update, anchors, beacons, hasWater, dem: D, csm, liftHeight, setDetail };
 }

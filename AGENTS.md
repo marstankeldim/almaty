@@ -109,3 +109,17 @@ light, procedural globe) and warn once. A fresh clone runs without assets.
 - **Avoid reserved GLSL identifiers in injected chunks** (`flat`, `sample`,
   `input`, `output`, `filter`, …). GLSL ES 3.0 rejects them and the failure is
   a silent non-compiling material.
+- **Every material patched via `onBeforeCompile` needs a
+  `customProgramCacheKey`.** three's default key is
+  `onBeforeCompile.toString()` — the function's *source text*. Our per-location
+  closures are byte-identical (the template expressions are unevaluated in the
+  source), so all three DEM terrains silently shared one compiled program and
+  per-preset GLSL never ran. Key on the location id.
+- **Do not toggle MSAA at runtime.** Changing it means disposing the composer's
+  render targets mid-session; the reallocated pair stops being cleared and
+  earlier scenes bleed through as composited garbage. The quality ladder ends
+  at a DPR step instead.
+- Detail/ripple frequencies must be checked against the **pixel footprint** at
+  the vantage that renders them. The nearest visible ground is 442m (lake),
+  1282m (canyon), 3235m (range) — a few metres per pixel. Anything finer than
+  that aliases (water) or averages to nothing (texture detail).
