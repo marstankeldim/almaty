@@ -76,6 +76,7 @@ export function createDirector({ camera, globe, scenes, ensureScene, onArrive })
     travel = {
       t: 0,
       to: id,
+      from: activeLoc,
       fromPos: camera.position.clone(),
       fromLook: scenes[activeLoc].anchors.lookRest.clone(),
       swapped: false,
@@ -84,14 +85,16 @@ export function createDirector({ camera, globe, scenes, ensureScene, onArrive })
   }
 
   function idleSway(t, A) {
+    // amplitudes come from the scene, in its own units (see anchors.sway)
+    const s = A.sway ?? { px: 0.6, py: 0.18, lx: 14, ly: 5 };
     camera.position.set(
-      A.stand.x + Math.sin(t * 0.19) * 0.6,
-      A.stand.y + Math.sin(t * 0.45) * 0.18,
+      A.stand.x + Math.sin(t * 0.19) * s.px,
+      A.stand.y + Math.sin(t * 0.45) * s.py,
       A.stand.z,
     );
     _look.copy(A.lookRest);
-    _look.x += Math.sin(t * 0.11) * 14;
-    _look.y += Math.sin(t * 0.23) * 5;
+    _look.x += Math.sin(t * 0.11) * s.lx;
+    _look.y += Math.sin(t * 0.23) * s.ly;
     camera.lookAt(_look);
   }
 
@@ -153,13 +156,14 @@ export function createDirector({ camera, globe, scenes, ensureScene, onArrive })
         if (tt < J.LIFT) {
           const k = easeIn(seg(tt, 0, J.LIFT));
           const arc = Math.sin(k * Math.PI); // helicopter arc, not an elevator
+          const lift = scenes[travel.from]?.liftHeight ?? 260;
           _pos.copy(travel.fromPos);
-          _pos.y += k * 260;
-          _pos.z += k * 40;
-          _pos.x += arc * 28;
+          _pos.y += k * lift;
+          _pos.z += k * lift * 0.15;
+          _pos.x += arc * lift * 0.11;
           camera.position.copy(_pos);
           _look.copy(travel.fromLook);
-          _look.y += k * 120; // gaze rises toward the horizon as we climb
+          _look.y += k * lift * 0.45; // gaze rises toward the horizon as we climb
           camera.lookAt(_look);
           camera.rotateZ(arc * -0.06); // bank into the turn
           params.whiteout = seg(tt, J.WHITEOUT_IN, J.LIFT - 0.2);

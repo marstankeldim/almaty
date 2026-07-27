@@ -11,6 +11,8 @@
     "postinstall": "node scripts/copy-basis.mjs"
   },
   "dependencies": {
+    "n8ao": "^1.10.3",
+    "postprocessing": "^6.36.0",
     "three": "^0.166.1",
     "topojson-client": "^3.1.0"
   },

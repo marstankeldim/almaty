@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { CSM } from 'three/addons/csm/CSM.js';
+import { LOCATIONS } from './locations.js';
+import { buildHeightfield } from './terrain-geometry.js';
 
 // ---------------------------------------------------------------------------
 // Deterministic 2D value noise (CPU) — heightfields & placement
@@ -56,20 +59,28 @@ function buildDemSampler(P, demGrid) {
   const upm = cfg.unitsPerMeter;
   const vExag = cfg.vExag;
   const [uS, vS] = cfg.station;
-  const spanX = meta.width * mpp * upm;   // full E–W extent, scene units
-  const spanZ = meta.height * mpp * upm;  // full N–S extent, scene units
+  // dimensions come from the decoded PNG itself — sidecar schemas vary
+  const spanX = demGrid.width * mpp * upm;   // full E–W extent, scene units
+  const spanZ = demGrid.height * mpp * upm;  // full N–S extent, scene units
   const elevStation = sample(uS, vS);
   const clamp01 = (x) => Math.min(1, Math.max(0, x));
 
   // world (x,z) → DEM (u,v). +X east, −Z south (in front of the camera).
   const uvOf = (x, z) => [clamp01(uS + x / spanX), clamp01(vS - z / spanZ)];
+  // `deepen` amplifies below-station relief — canyon walls the DEM's meters-
+  // per-pixel resolution flattens get their visual depth back
+  const deepen = cfg.deepen ?? 1;
   const height = (x, z) => {
     const [u, v] = uvOf(x, z);
-    return (sample(u, v) - elevStation) * upm * vExag;
+    let h = sample(u, v) - elevStation;
+    if (h < 0) h *= deepen;
+    return h * upm * vExag;
   };
 
   const xMin = -uS * spanX, xMax = (1 - uS) * spanX;
   const zBack = vS * spanZ, zFront = -(1 - vS) * spanZ;
+  const sceneOf = (u, v) => [(u - uS) * spanX, -(v - vS) * spanZ];
+  const heightAtUv = (u, v) => (sample(u, v) - elevStation) * upm * vExag;
 
   // find the tallest summit in the forward view to aim the camera at
   let best = { h: -Infinity, x: 0, z: zFront * 0.5 };
@@ -83,20 +94,57 @@ function buildDemSampler(P, demGrid) {
     }
   }
   const peakY = (best.h - elevStation) * upm * vExag;
-  // aerial vantage: hover near peak-shoulder height, a set distance north of
-  // the summit, looking south across the range (matches the reference plate)
-  const camY = peakY * (cfg.heightFrac ?? 0.85);
-  const viewDist = (cfg.viewDistFrac ?? 0.32) * spanZ;
-  const stand = new THREE.Vector3(best.x * 0.35, camY, best.z + viewDist);
-  const look = new THREE.Vector3(best.x, peakY * 0.92, best.z);
+
+  let stand, look;
+  if (cfg.focus) {
+    // grounded vantage: stand at the station, a set height above the terrain,
+    // gazing at a chosen DEM point (a lake, a gorge) rather than the summit
+    const [fu, fv] = cfg.focus;
+    const [fx, fz] = sceneOf(fu, fv);
+    const fy = heightAtUv(fu, fv);
+    stand = new THREE.Vector3(0, (cfg.camAboveM ?? 60) * upm * vExag, 0);
+    look = new THREE.Vector3(fx, fy + (cfg.lookLiftM ?? 0) * upm * vExag, fz);
+  } else {
+    // aerial vantage: hover near peak-shoulder height, a set distance north of
+    // the summit, looking south across the range (matches the reference plate)
+    const camY = peakY * (cfg.heightFrac ?? 0.85);
+    const viewDist = (cfg.viewDistFrac ?? 0.32) * spanZ;
+    stand = new THREE.Vector3(best.x * 0.35, camY, best.z + viewDist);
+    look = new THREE.Vector3(best.x, peakY * 0.92, best.z);
+  }
+  // Idle sway is expressed in metres, because the same amplitude that reads
+  // as a documentary drone drift from 400m up would put a standing eye
+  // underground. Grounded vantages get a human's near-stillness instead.
+  const grounded = !!cfg.focus && (cfg.camAboveM ?? 60) < 20;
+  const m = upm * vExag;
+  const sway = grounded
+    ? { px: 0.30 * m, py: 0.10 * m, lx: 9 * m, ly: 3 * m }
+    : { px: 6 * m, py: 1.8 * m, lx: 140 * m, ly: 50 * m };
+
   const anchors = {
     stand,
+    sway,
     lookRest: look,
-    entryPos: new THREE.Vector3(best.x * 0.1, camY + spanZ * 0.12, stand.z + spanZ * 0.14),
-    entryLook: new THREE.Vector3(best.x * 0.6, peakY * 0.65, best.z * 0.6),
+    entryPos: new THREE.Vector3(
+      stand.x + (look.x - stand.x) * -0.1,
+      stand.y + spanZ * 0.11,
+      stand.z + spanZ * 0.13),
+    entryLook: new THREE.Vector3().lerpVectors(stand, look, 0.6),
   };
 
-  return { height, uvOf, xMin, xMax, zFront, zBack, anchors, peak: best, peakY, stand };
+  // everything the pure mesher needs — shared by the worker and the inline path
+  const meshSpec = {
+    grid: demGrid.grid, gridW: demGrid.width, gridH: demGrid.height,
+    station: [uS, vS], elevStation, spanX, spanZ,
+    upm, vExag, deepen,
+    xMin, xMax, zFront, zBack,
+    segX: cfg.segX ?? 640, segZ: cfg.segZ ?? 440,
+  };
+
+  return {
+    height, uvOf, sceneOf, heightAtUv, xMin, xMax, zFront, zBack,
+    anchors, peak: best, peakY, stand, meshSpec,
+  };
 }
 
 const NOISE_GLSL = /* glsl */ `
@@ -201,7 +249,17 @@ const PRESETS = {
       heightFrac: 0.82,       // hover at 82% of summit height
       viewDistFrac: 0.34,     // this far north of the summit
       fogColor: [0.62, 0.55, 0.52],
-      fogDensity: 0.00034,
+      fogDensity: 0.00034,    // (procedural-path fallback)
+      fogExp2: 0.00024,       // MeshStandard FogExp2 for the lit DEM
+      sunIntensity: 3.1,
+      hemi: 1.15,             // no-IBL fallback fill
+      // nearest visible ground ~3235m: only very large features resolve
+      detail: { coarseM: 900, fineM: 320, fadeM: 9000, albedo: 0.14, rough: 0.20 },
+      hdri: '/assets/hdri/sunrise-mountain-4k.hdr',
+      envIntensity: 0.18,     // subtle fill — the CSM sun stays the key light
+      envYaw: 0,              // rotate HDRI sun to match sunDir (look-dev)
+      hemiWithEnv: 0.05,      // near-zero ground bounce alongside IBL
+      shadowFar: 2400,
       segX: 700, segZ: 466,
     },
   },
@@ -241,6 +299,64 @@ const PRESETS = {
       { to: 'trans-ili-alatau', name: 'Trans-Ili Alatau', x: 38, z: -160, h: 58 },
       { to: 'charyn-canyon', name: 'Charyn Canyon', x: -52, z: -150, h: 58 },
     ],
+    // the real cirque at ~2500m: stand on the north shore, gaze south across
+    // the turquoise water into the amphitheatre of peaks
+    // lake basin measured from the DEM itself: flattest contiguous region sits
+    // at 2506m, uv (0.586, 0.714), ~714 × 1127m — the real Big Almaty Lake
+    dem: {
+      // Standing on the shore. Station measured off the DEM: a ledge at
+      // 2507.2m — 1.2m above the water — with only 0.2m of relief within
+      // ±25m, so a 1.7m eye cannot be buried by a neighbouring mesh vertex
+      // (quads here span ~14m), and open water due south for 400m.
+      // A low bluff 10m above the water, not the beach. The beach is only 1m
+      // above a lake surface whose own DEM pixels span 4.5m (2503.5-2508.0),
+      // so no threshold could hold it dry without punching holes in the lake.
+      // 10m of margin clears that noise and yields 154m of dry foreground
+      // before the water — which is what the detail plates need to land on.
+      station: [0.593, 0.622],
+      // Bearing scan from that station: SE has the longest water (838m) but
+      // only 2603m hills behind it, while SW crosses 237m of water into a
+      // 3356m wall standing 24.6deg above the eye at 1850m. Took the wall.
+      focus: [0.424, 0.870],
+      camAboveM: 1.7,           // human eye height
+      lookLiftM: -300,          // summit into the upper third, water below
+      unitsPerMeter: 0.1,   // intimate scale: 1 unit = 10m
+      vExag: 1.0,           // true proportions at close range
+      fogColor: [0.60, 0.58, 0.56],
+      fogExp2: 0.00012,
+      sunIntensity: 2.8,
+      hemiWithEnv: 0.05,
+      // nearest visible ground ~442m, median ~3.4 m/px
+      detail: { coarseM: 260, fineM: 90, fadeM: 3200, albedo: 0.13, rough: 0.22 },
+      // Only vantage with a real near field (a 1.7m eye on the shore), so the
+      // only one that earns photographic plates. tileM is gray_rocks' actual
+      // 1.8m capture span: at 1024px that is 1.8mm/texel, still above the
+      // pixel footprint out to ~50m, which is what fadeM tracks.
+      plates: {
+        set: 'scree', tileM: 1.8, fadeM: 80,
+        normal: 0.55, rough: 0.8, albedo: 0.7, albedoMean: 0.17663,
+      },
+      hdri: '/assets/hdri/morning-alpine-4k.hdr',
+      // 0.22 flooded the scene with flat sky fill and killed the contrast the
+      // sun+shadow pass had earned; this vantage looks along a lit slope where
+      // that fill has nothing to reveal.
+      envIntensity: 0.07,
+      // Sentinel-2 pixels already bake in their own illumination, so relighting
+      // them saturates once ground is close and facing up. The distant terrain
+      // never showed it; the shoreline foreground did.
+      albedoScale: 0.68,
+      envYaw: 0,
+      shadowFar: 1000,
+      segX: 583, segZ: 558,
+      water: {
+        center: [0.586, 0.714], radiusM: 330,
+        swellM: 45, chopM: 2.6, chopFadeM: 90, rippleAmp: 2.0, roughness: 0.14,
+        // ±5m: wide enough to cover the lake surface's own 4.5m of DEM
+        // noise, tight enough to leave a bluff 10m above it dry. The default
+        // ±12m was written for a vantage 95m up and floods the shore.
+        bandUnits: 0.5,
+      },
+    },
   },
 
   'charyn-canyon': {
@@ -261,19 +377,58 @@ const PRESETS = {
     spruce: null,
     water: null,
     clouds: { count: 8, y: [140, 190], zRange: [-180, -430], xSpread: 700, opacity: [0.08, 0.16] },
-    dust: { count: 900, alpha: 2.0 },
+    dust: { count: 420, alpha: 0.9 },
     stand: { x: 56, z: 4, eye: 2.45 },
     lookRest: [0, -24, -320],
     entryPos: [-10, 120, 82],
     entryLook: [2, -30, -92],
     birds: { height: [70, 105], radius: [65, 120], cz: -122 },
     beacons: [{ to: 'big-almaty-lake', name: 'Big Almaty Lake', x: 14, z: -180, h: 58 }],
+    // the real gorge: stand on the northern rim of the Valley of Castles,
+    // gazing along the winding red trench toward the afternoon sun
+    // measured from the DEM: a 232m-deep gorge whose floor runs northeast from
+    // uv (0.57, 0.77) to (0.71, 0.63); rim to the northwest sits at 1143m
+    dem: {
+      station: [0.532, 0.751],  // on the rim above the deepest reach
+      focus: [0.700, 0.645],    // gaze northeast along the trench
+      camAboveM: 620,           // above the 1488m plateau, not inside its bowl
+      lookLiftM: -120,          // tilt down into the canyon
+      unitsPerMeter: 0.1,
+      vExag: 1.15,
+      deepen: 1.9,          // restore the wall depth z14 sampling flattens
+      saturation: 1.22,     // retuned once the cache-key fix made it apply
+      gamma: 0.9,
+      // one band per ~20m of elevation; at 0.1 upm a unit is 10m, so the
+      // frequency is per-unit — 2.2 gave 4.5m bands that read as combing
+      bands: { freq: 0.5, strength: 0.32 },
+      fogColor: [0.66, 0.48, 0.30],
+      fogExp2: 0.00018,
+      sunIntensity: 3.0,
+      hemiWithEnv: 0.06,
+      // nearest visible ground ~1282m and terrain fills ~46% of frame
+      detail: { coarseM: 420, fineM: 150, fadeM: 5200, albedo: 0.17, rough: 0.26 },
+      hdri: '/assets/hdri/afternoon-desert-4k.hdr',
+      envIntensity: 0.25,
+      envYaw: 0,
+      shadowFar: 900,
+      segX: 640, segZ: 630,
+    },
   },
 };
 
 // ---------------------------------------------------------------------------
-export function presetHasDem(id) {
-  return !!PRESETS[id]?.dem;
+export function presetDem(id) {
+  return PRESETS[id]?.dem ?? null;
+}
+
+/**
+ * The meshing spec for a location, without building its scene — lets the
+ * caller precompute geometry in a worker before the scene is ever needed.
+ */
+export function demMeshSpec(id, demGrid) {
+  const P = PRESETS[id];
+  if (!P?.dem || !demGrid) return null;
+  return buildDemSampler(P, demGrid).meshSpec;
 }
 
 export function createTerrainScene(id, assets = {}) {
@@ -304,6 +459,11 @@ export function createTerrainScene(id, assets = {}) {
     uSnowLine: { value: P.palette.snowLine },
     uAlpenglow: { value: P.palette.alpenglow },
     uBands: { value: P.palette.bands || 0 },
+    uDetail: { value: 1 },
+    uPlateA: { value: null },
+    uPlateN: { value: null },
+    uPlateR: { value: null },
+    uPlate: { value: 1 },
   };
 
   // ---- sky dome -------------------------------------------------------------
@@ -338,77 +498,299 @@ export function createTerrainScene(id, assets = {}) {
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 20), skyMat));
 
   // ---- real-DEM terrain (satellite-draped) ------------------------------------
+  let csm = null;
   if (DEM) {
-    const geomW = D.xMax - D.xMin, geomD = D.zBack - D.zFront;
-    const cx = (D.xMax + D.xMin) / 2, cz = (D.zBack + D.zFront) / 2;
-    const segX = P.dem.segX ?? 640, segZ = P.dem.segZ ?? 440;
-    const g = new THREE.PlaneGeometry(geomW, geomD, segX, segZ);
-    g.rotateX(-Math.PI / 2);
-    g.translate(cx, 0, cz);
-    const pos = g.attributes.position, uvA = g.attributes.uv;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), z = pos.getZ(i);
-      pos.setY(i, D.height(x, z));
-      const [u, v] = D.uvOf(x, z);
-      uvA.setXY(i, u, 1 - v); // texture row 0 is south (flipY); DEM v=0 is north
-    }
-    g.computeVertexNormals();
-    const demMat = new THREE.ShaderMaterial({
-      uniforms: { ...uniforms, uSat: { value: assets.satelliteTex ?? null } },
-      vertexShader: /* glsl */ `
-        varying vec3 vNormal; varying vec3 vWorld; varying vec2 vUv;
-        void main() {
-          vNormal = normal; vWorld = position; vUv = uv;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        uniform sampler2D uSat;
-        uniform vec3 uSunDir, uSunCol, uAmbient, uFogColor;
-        uniform float uTime, uFogDensity;
-        varying vec3 vNormal; varying vec3 vWorld; varying vec2 vUv;
-        ${NOISE_GLSL}
-        void main() {
-          vec3 n = normalize(vNormal);
-          float dist = length(vWorld - cameraPosition);
+    // Prefer a worker-built payload; fall back to meshing inline if the
+    // worker hasn't finished (or isn't available) by the time we're needed.
+    const t0 = performance.now();
+    const built = assets.geometry ?? buildHeightfield(D.meshSpec);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(built.positions, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(built.uvs, 2));
+    g.setAttribute('normal', new THREE.BufferAttribute(built.normals, 3));
+    g.setIndex(new THREE.BufferAttribute(built.indices, 1));
+    g.computeBoundingSphere();
+    console.log(`[atlas]   ${id} geometry ${assets.geometry ? '(worker)' : '(inline)'}`
+      + ` assembled in ${(performance.now() - t0).toFixed(0)}ms`);
 
-          // near-field detail normal — hides the coarse DEM tessellation
-          float be = 1.1, bs = 0.05;
-          float bump = exp(-dist * 0.004) * 1.5;
-          float hL = fbm((vWorld.xz - vec2(be, 0.0)) * bs);
-          float hR = fbm((vWorld.xz + vec2(be, 0.0)) * bs);
-          float hD = fbm((vWorld.xz - vec2(0.0, be)) * bs);
-          float hU = fbm((vWorld.xz + vec2(0.0, be)) * bs);
-          n = normalize(n + vec3((hL - hR) * bump, 0.0, (hD - hU) * bump));
-
-          vec3 albedo = texture2D(uSat, vUv).rgb;
-          float lum = dot(albedo, vec3(0.299, 0.587, 0.114));
-          albedo = mix(vec3(lum), albedo, 1.16);        // gentle saturation lift
-          albedo = pow(max(albedo, 0.0), vec3(0.90));    // lift midtones
-
-          float ndl = dot(n, uSunDir);
-          // soft key: the mosaic already carries flat daylight, so add warmth
-          // and terrain self-shading without crushing it to black
-          float key = 0.45 + 0.7 * max(ndl, 0.0);
-          vec3 sky = uAmbient * (0.65 + 0.35 * n.y);
-          vec3 col = albedo * (uSunCol * key * 0.5 + sky);
-
-          // alpenglow: real snow/glacier pixels burn gold where the low sun
-          // strikes, and take a cool sky-fill where they fall into shadow
-          float snow = smoothstep(0.5, 0.8, lum);
-          col += snow * vec3(1.0, 0.55, 0.30) * pow(max(ndl, 0.0), 1.3) * 0.7;
-          col += snow * vec3(0.34, 0.42, 0.62) * (1.0 - max(ndl, 0.0)) * 0.18;
-
-          float fogAmt = 1.0 - exp(-dist * uFogDensity);
-          col = mix(col, uFogColor, fogAmt);
-          gl_FragColor = vec4(col, 1.0);
-        }
-      `,
+    // Physically-lit terrain: satellite albedo, real sun (cascaded shadows),
+    // hemisphere sky/ground fill (stands in for HDRI IBL until M3).
+    const terrMat = new THREE.MeshStandardMaterial({
+      map: assets.satelliteTex ?? null,
+      roughness: 0.97,
+      metalness: 0.0,
     });
-    const mesh = new THREE.Mesh(g, demMat);
-    mesh.receiveShadow = true;
+    // Mesoscale detail is specified in METRES and converted to scene units
+    // here, so the same numbers mean the same thing at any unitsPerMeter.
+    // detailQuality 0 drops it entirely (quality ladder / weak GPUs).
+    const dcfg = P.dem.detail;
+    const det = dcfg ? {
+      f0: 1 / (dcfg.coarseM * P.dem.unitsPerMeter),
+      f1: 1 / (dcfg.fineM * P.dem.unitsPerMeter),
+      fade: 1 / (dcfg.fadeM * P.dem.unitsPerMeter),
+      albedo: dcfg.albedo,
+      rough: dcfg.rough,
+    } : null;
+
+    // Photographic micro-relief for vantages that actually have a near field.
+    // tileM is the texture's real-world capture span, so the plate lands at
+    // life size; fadeM is where it stops exceeding the pixel footprint.
+    const pcfg = P.dem.plates;
+    const plates = pcfg && assets.plates ? {
+      inv: 1 / (pcfg.tileM * P.dem.unitsPerMeter),
+      fade: 1 / (pcfg.fadeM * P.dem.unitsPerMeter),
+      normal: pcfg.normal,
+      rough: pcfg.rough,
+      albedo: pcfg.albedo ?? 0,
+      // true LINEAR mean luminance of the plate, measured offline. Dividing
+      // by it makes the albedo term exposure-neutral by construction; reading
+      // the mean from a 1x1 mip instead would be both non-portable (LOD bias
+      // is clamped to as little as 2.0) and biased upward by sRGB filtering.
+      mean: pcfg.albedoMean ?? 1,
+    } : null;
+    if (plates) {
+      uniforms.uPlateA.value = assets.plates.albedo;
+      uniforms.uPlateN.value = assets.plates.normal;
+      uniforms.uPlateR.value = assets.plates.roughness;
+    }
+
+    // A real lake is already in the satellite drape and already flat in the
+    // DEM — so shade water where the terrain IS water (level + flat) instead
+    // of floating a disc that can't match its shape. Ripples ride the surface
+    // normal; the specular streak comes from the scene's own sun.
+    const wcfg = P.dem.water;
+    const waterMaskGlsl = wcfg ? `
+      {
+        float lvl = ${(D.heightAtUv(...wcfg.center) + 0.02).toFixed(4)};
+        // 'flat' is a reserved GLSL ES 3.0 interpolation qualifier — naming a
+        // variable that silently breaks compilation on the GLSL3 code path
+        float flatness = smoothstep(0.55, 0.9, normalize(vNormal).y);
+        float band = 1.0 - smoothstep(0.0, ${(wcfg.bandUnits ?? 1.2).toFixed(2)}, abs(vWpos.y - lvl));
+        float wet = flatness * band;
+        if (wet > 0.01) {
+          // The nearest water is ~440m out, where one pixel spans several
+          // metres. Ripples shorter than that footprint cannot be resolved —
+          // they alias into salt-and-pepper specular and blow through the
+          // bloom threshold. So: long swell only, damped further with
+          // distance, and a roughness floor that keeps the highlight broad
+          // rather than mirror-sharp.
+          float wUnitsPerM = ${P.dem.unitsPerMeter.toFixed(4)};
+          float wSwell = 1.0 / (${(wcfg.swellM ?? 45).toFixed(1)} * wUnitsPerM);
+          vec2 wp = vWpos.xz * wSwell;
+          float we = 0.12;
+          vec2 wDrift = vec2(uWaterTime * 0.012, uWaterTime * 0.007);
+          float w0 = fbmT(wp + wDrift);
+          float wx = fbmT(wp + vec2(we, 0.0) + wDrift) - w0;
+          float wz = fbmT(wp + vec2(0.0, we) + wDrift) - w0;
+          float wNear = exp(-length(vWpos - cameraPosition) * ${((wcfg.rippleFadeM ? 1 / (wcfg.rippleFadeM * P.dem.unitsPerMeter) : 0.0016)).toFixed(6)});
+          float wAmp = ${(wcfg.rippleAmp ?? 2.2).toFixed(2)} * wNear;
+          ${wcfg.chopM ? `
+          // Near-field chop. From a shoreline eye the water a few metres out
+          // is centimetres per pixel, where swell alone reads as a dead sheet;
+          // but this octave is far below the footprint further out, so it is
+          // faded hard with distance to stay the right side of aliasing.
+          float wChop = exp(-length(vWpos - cameraPosition) * ${(1 / (wcfg.chopFadeM * P.dem.unitsPerMeter)).toFixed(5)});
+          if (wChop > 0.02) {
+            vec2 cp = vWpos.xz * ${(1 / (wcfg.chopM * P.dem.unitsPerMeter)).toFixed(4)};
+            vec2 cDrift = vec2(uWaterTime * 0.09, uWaterTime * 0.05);
+            float c0 = fbmT(cp + cDrift);
+            float cx = fbmT(cp + vec2(0.14, 0.0) + cDrift) - c0;
+            float cz = fbmT(cp + vec2(0.0, 0.14) + cDrift) - c0;
+            wx += cx * wChop * 0.9;
+            wz += cz * wChop * 0.9;
+          }
+          ` : ''}
+          normal = normalize(mix(normal, normalize(vec3(wx * wAmp, 1.0, wz * wAmp)), wet));
+          roughnessFactor = mix(roughnessFactor, ${(wcfg.roughness ?? 0.16).toFixed(3)}, wet);
+        }
+      }` : '';
+
+    // grade the flat noon mosaic + restore near-field micro-relief the coarse
+    // DEM tessellation loses; chained AFTER CSM's uniform injection
+    const gradeShader = (shader) => {
+      if (wcfg) shader.uniforms.uWaterTime = uniforms.uTime;
+      if (det) shader.uniforms.uDetail = uniforms.uDetail;
+      if (plates) {
+        shader.uniforms.uPlateA = uniforms.uPlateA;
+        shader.uniforms.uPlateN = uniforms.uPlateN;
+        shader.uniforms.uPlateR = uniforms.uPlateR;
+        shader.uniforms.uPlate = uniforms.uPlate;
+      }
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWpos;')
+        .replace('#include <begin_vertex>',
+          '#include <begin_vertex>\nvWpos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>
+          varying vec3 vWpos;
+          ${det || plates ? 'float gDetail = 0.0;\n          float gSnow = 0.0;' : ''}
+          ${plates ? 'uniform sampler2D uPlateA;\n          uniform sampler2D uPlateN;\n          uniform sampler2D uPlateR;\n          uniform float uPlate;' : ''}
+          ${det ? 'uniform float uDetail;' : ''}
+          ${wcfg ? 'uniform float uWaterTime;' : ''}
+          float h21(vec2 p){p=fract(p*vec2(234.34,435.345));p+=dot(p,p+34.23);return fract(p.x*p.y);}
+          float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h21(i),h21(i+vec2(1,0)),f.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),f.x),f.y);}
+          float fbmT(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*vn(p);p=p*2.1+13.;a*=.5;}return v;}
+          // Decorrelated companion field. The relief, the strata jitter and the
+          // detail mask all ride the same fbmT lattice; without a rotation AND
+          // a domain offset their octaves co-locate and read as one camo layer.
+          const mat2 DET_ROT = mat2(0.8112, -0.5847, 0.5847, 0.8112);
+          float fbmD(vec2 p){ return fbmT(DET_ROT * p + vec2(137.31, 61.07)); }`)
+        .replace('#include <map_fragment>', `#include <map_fragment>
+          {
+            float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+            diffuseColor.rgb = mix(vec3(lum), diffuseColor.rgb, ${(P.dem.saturation ?? 1.16).toFixed(3)});
+            diffuseColor.rgb = pow(max(diffuseColor.rgb, 0.0), vec3(${(P.dem.gamma ?? 0.90).toFixed(3)}));
+            diffuseColor.rgb *= ${(P.dem.albedoScale ?? 1).toFixed(3)};
+            ${P.dem.bands ? `
+            // sedimentary strata: horizontal layer tints on steep faces only
+            float steep = smoothstep(0.85, 0.55, normalize(vNormal).y);
+            float layer = floor(vWpos.y * ${P.dem.bands.freq.toFixed(2)} + fbmT(vWpos.xz * 0.06) * 1.6);
+            float lr = h21(vec2(layer, 7.0));
+            diffuseColor.rgb *= mix(1.0, mix(${(1 - P.dem.bands.strength / 2).toFixed(3)}, ${(1 + P.dem.bands.strength / 2).toFixed(3)}, lr), steep);
+            ` : ''}
+            ${det ? `
+            // Mesoscale material break-up. Ray-marching the settled cameras
+            // against the real DEMs put the nearest visible ground at 442m
+            // (lake), 1282m (canyon) and 3235m (range): metre-scale photo
+            // plates would sit at mip 7-12 — a 4x4 image — and contribute
+            // nothing. So the budget goes to the 20-200m band that is on
+            // screen, as two decorrelated octaves with zero texture fetches.
+            float dM = fbmD(vWpos.xz * ${det.f0.toFixed(5)})
+                     + 0.45 * fbmD(vWpos.xz * ${det.f1.toFixed(5)} + 41.7);
+            dM = (dM / 1.45 - 0.5) * 2.0;               // ~[-1,1], mean 0
+            float dFade = exp(-length(vWpos - cameraPosition) * ${det.fade.toFixed(6)});
+            float dW = dM * dFade * uDetail;
+            // exposure-neutral: brightens and darkens equally about the mean
+            diffuseColor.rgb *= 1.0 + dW * ${det.albedo.toFixed(3)};
+            gDetail = dW;
+            // bright satellite pixels are snow/glacier: keep them off the
+            // roughness path, where a specular lift feeds the bloom threshold
+            gSnow = smoothstep(0.55, 0.82, lum);
+            ` : ''}
+            ${plates && !det ? 'gSnow = smoothstep(0.55, 0.82, lum);' : ''}
+            ${plates && plates.albedo > 0 ? `
+            // Texture variation is what the eye actually reads on flat, bright
+            // near ground — shading alone measured as a 1.7% contrast change.
+            // Ratio against the baked linear mean keeps overall exposure put.
+            {
+              float paF = exp(-length(vWpos - cameraPosition) * ${plates.fade.toFixed(5)}) * uPlate;
+              if (paF > 0.02) {
+                vec3 pa = texture2D(uPlateA, vWpos.xz * ${plates.inv.toFixed(4)}).rgb;
+                float paL = dot(pa, vec3(0.2126, 0.7152, 0.0722)) / ${plates.mean.toFixed(5)};
+                // clamp kept symmetric about 1.0 — the old [0.55, 1.75] let
+                // the ratio brighten far more than it could darken, which put
+                // a net lift on exactly the near ground it was meant to texture
+                diffuseColor.rgb *= mix(1.0, clamp(paL, 0.62, 1.38),
+                                        paF * ${plates.albedo.toFixed(3)} * (1.0 - gSnow));
+              }
+            }
+            ` : ''}
+          }`)
+        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+          ${det ? `
+          // matching micro-roughness: rougher in the hollows, tighter on the
+          // crests. Clamped to 1.0 — GGX alpha = roughness^2 is invalid above
+          // it and reads as a flat dark wash rather than "rougher".
+          roughnessFactor = clamp(
+            roughnessFactor * (1.0 + gDetail * ${det.rough.toFixed(3)} * (1.0 - gSnow)),
+            0.06, 1.0);
+          ` : ''}
+          ${plates ? `
+          {
+            float pF = exp(-length(vWpos - cameraPosition) * ${plates.fade.toFixed(5)}) * uPlate;
+            if (pF > 0.02) {
+              float pr = texture2D(uPlateR, vWpos.xz * ${plates.inv.toFixed(4)}).g;
+              roughnessFactor = clamp(mix(roughnessFactor,
+                roughnessFactor * (0.72 + 0.56 * pr), pF * ${plates.rough.toFixed(3)}), 0.06, 1.0);
+            }
+          }
+          ` : ''}`)
+        .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+          {
+            float d = length(vWpos - cameraPosition);
+            float amp = exp(-d * 0.004) * 1.3;
+            float e = 1.1, s = 0.05;
+            float hl = fbmT((vWpos.xz - vec2(e, 0.0)) * s), hr = fbmT((vWpos.xz + vec2(e, 0.0)) * s);
+            float hd = fbmT((vWpos.xz - vec2(0.0, e)) * s), hu = fbmT((vWpos.xz + vec2(0.0, e)) * s);
+            normal = normalize(normal + vec3((hl - hr) * amp, 0.0, (hd - hu) * amp));
+            ${plates ? `
+            // Photographic micro-relief. Colour deliberately comes only from
+            // the satellite: sampling a detail albedo would reintroduce an
+            // sRGB mip bias and a distance-keyed exposure shift.
+            {
+              float pF = exp(-length(vWpos - cameraPosition) * ${plates.fade.toFixed(5)}) * uPlate;
+              if (pF > 0.02) {
+                vec3 pn = texture2D(uPlateN, vWpos.xz * ${plates.inv.toFixed(4)}).xyz * 2.0 - 1.0;
+                // world-XZ planar projection, so tangent space maps straight
+                // onto world X/Z (loader sets flipY=false to fix the V sign)
+                normal = normalize(normal
+                  + vec3(pn.x, 0.0, pn.y) * ${plates.normal.toFixed(3)} * pF * (1.0 - gSnow));
+              }
+            }
+            ` : ''}
+            ${waterMaskGlsl}
+          }`);
+    };
+
+    const mesh = new THREE.Mesh(g, terrMat);
     mesh.castShadow = true;
+    mesh.receiveShadow = true;
     scene.add(mesh);
+
+    // lighting fill: HDRI image-based lighting when available, with a faint
+    // ground bounce; hemisphere-only as the no-asset fallback
+    if (assets.envMap) {
+      scene.environment = assets.envMap;
+      scene.environmentRotation = new THREE.Euler(0, P.dem.envYaw ?? 0, 0);
+      // material-level intensity: scene.environmentIntensity is silently
+      // ignored on this three version, so control it where it's guaranteed
+      terrMat.envMapIntensity = P.dem.envIntensity ?? 0.6;
+    }
+    const hemi = new THREE.HemisphereLight(
+      new THREE.Color(...P.sky.horizon).lerp(new THREE.Color(1, 1, 1), 0.25),
+      new THREE.Color(...P.ambient),
+      assets.envMap ? (P.dem.hemiWithEnv ?? 0.25) : (P.dem.hemi ?? 1.0));
+    scene.add(hemi);
+
+    // sun + cascaded shadow maps spanning the whole range
+    if (assets.camera) {
+      const lightDir = new THREE.Vector3(...P.sunDir).normalize().negate();
+      csm = new CSM({
+        camera: assets.camera,
+        parent: scene,
+        cascades: 3,
+        maxFar: P.dem.shadowFar ?? 2400,
+        mode: 'practical',
+        shadowMapSize: 2048,
+        lightDirection: lightDir,
+        lightIntensity: P.dem.sunIntensity ?? P.sun.power,
+        lightNear: 1,
+        lightFar: 6000,
+        lightMargin: 800,
+      });
+      const warm = new THREE.Color(...P.sun.color);
+      for (const l of csm.lights) {
+        l.color.copy(warm);
+        l.shadow.bias = -0.00018;
+        l.shadow.normalBias = 1.5;
+      }
+      csm.setupMaterial(terrMat);
+      const csmObc = terrMat.onBeforeCompile;
+      terrMat.onBeforeCompile = function (shader, r) {
+        csmObc.call(this, shader, r); // registers CSM uniforms + shader handle
+        gradeShader(shader);
+      };
+    } else {
+      terrMat.onBeforeCompile = gradeShader;
+    }
+    // three keys the program cache on onBeforeCompile.toString() — the source
+    // TEXT, which is identical for every location because the per-preset
+    // values live in captured variables, not in the source. Without this the
+    // second and third DEM materials silently reuse the first one's compiled
+    // program, so their grade constants, strata bands and water mask never run.
+    terrMat.customProgramCacheKey = () => `dem-${id}`;
+
+    scene.fog = new THREE.FogExp2(new THREE.Color(...fogColor), P.dem.fogExp2 ?? 0.00028);
   } else {
   // ---- procedural terrain -----------------------------------------------------
   const SIZE = 1600, SEGS = 400, CENTER_Z = -260;
@@ -503,8 +885,12 @@ export function createTerrainScene(id, assets = {}) {
   const standH = DEM ? 0 : H(P.stand.x, P.stand.z);
 
   // ---- water (Big Almaty Lake's turquoise mirror) -----------------------------
-  if (P.water && !DEM) {
-    const W = P.water;
+  // DEM scenes place the plane at the real lake surface (the DEM carries the
+  // water's own elevation); colors come from the shared P.water recipe.
+  // DEM scenes shade water as a terrain mask (see waterMaskGlsl) — the real
+  // shoreline comes from the elevation model, so no disc is needed.
+  const W = DEM ? null : P.water;
+  if (W) {
     const wGeo = new THREE.CircleGeometry(W.radius, 72);
     wGeo.rotateX(-Math.PI / 2);
     wGeo.translate(W.center.x, W.level, W.center.z);
@@ -516,6 +902,12 @@ export function createTerrainScene(id, assets = {}) {
       uSkyRef: { value: new THREE.Color(...W.sky) },
       uCenter: { value: new THREE.Vector2(W.center.x, W.center.z) },
       uRadius: { value: W.radius },
+      // ripple/glitter frequencies were authored for the procedural scenes'
+      // 1-unit-per-metre world; at 0.1 upm a metre is a tenth of a unit
+      uRippleScale: { value: DEM ? 1 / (P.dem.unitsPerMeter * 10) : 1 },
+      // match the lit terrain's exposure — an unlit plane reads as a cutout
+      uWaterLight: { value: DEM ? (P.dem.waterLight ?? 0.55) : 1 },
+      uSkyLight: { value: DEM ? (P.dem.waterSkyLight ?? 0.42) : 1 },
     };
     const wMat = new THREE.ShaderMaterial({
       uniforms: wUniforms,
@@ -528,13 +920,13 @@ export function createTerrainScene(id, assets = {}) {
         }
       `,
       fragmentShader: /* glsl */ `
-        uniform float uTime, uRadius;
+        uniform float uTime, uRadius, uRippleScale, uWaterLight, uSkyLight;
         uniform vec3 uSunDir, uDeep, uShallow, uSkyRef;
         uniform vec2 uCenter;
         varying vec3 vWorld;
         ${NOISE_GLSL}
         void main() {
-          vec2 p = vWorld.xz * 0.22;
+          vec2 p = vWorld.xz * 0.22 * uRippleScale;
           // rippled micro-normal from two scrolling noise fields
           float e = 0.11;
           float n1 = fbm(p + vec2(uTime * 0.045, uTime * 0.028));
@@ -548,13 +940,14 @@ export function createTerrainScene(id, assets = {}) {
 
           vec3 view = normalize(cameraPosition - vWorld);
           float fres = pow(1.0 - max(dot(view, n), 0.0), 2.4);
-          vec3 col = mix(water, uSkyRef, fres * 0.62);
+          // grazing angles mirror the sky, steep ones show the water body
+          vec3 col = mix(water * uWaterLight, uSkyRef * uSkyLight, fres * 0.72);
 
-          // sun glitter — sharp, sparkling
+          // sun glitter — a narrow streak on the sun's side, not a sheet
           vec3 refl = reflect(-view, n);
-          float g = pow(max(dot(refl, uSunDir), 0.0), 480.0);
-          float sparkle = 0.5 + 0.5 * vnoise(vWorld.xz * 9.0 + uTime * 1.7);
-          col += vec3(1.0, 0.92, 0.75) * g * 3.2 * sparkle;
+          float g = pow(max(dot(refl, uSunDir), 0.0), 900.0);
+          float sparkle = 0.5 + 0.5 * vnoise(vWorld.xz * 9.0 * uRippleScale + uTime * 1.7);
+          col += vec3(1.0, 0.92, 0.75) * g * 1.6 * sparkle;
 
           // soft breathing shore line
           float rim = smoothstep(uRadius * 0.985, uRadius * 0.93, dC)
@@ -825,8 +1218,8 @@ export function createTerrainScene(id, assets = {}) {
     }
   }
 
-  // ---- valley cloud sea (DEM scenes) — banks pooling between the ridges --------
-  if (DEM) {
+  // ---- valley cloud sea (aerial DEM scenes) — banks pooling between the ridges --
+  if (DEM && !P.dem.focus) {
     const spanX = D.xMax - D.xMin;
     const level = D.peakY * 0.17;
     for (let i = 0; i < 50; i++) {
@@ -852,16 +1245,19 @@ export function createTerrainScene(id, assets = {}) {
   }
 
   // ---- dust motes -----------------------------------------------------------------
-  if (!DEM) {
+  if (!DEM || P.dem.focus) {
     const DUST = P.dust?.count ?? 420;
     const dustAlpha = P.dust?.alpha ?? 1.0;
+    const cx = DEM ? D.stand.x : 0;
+    const cy = DEM ? D.stand.y - 2 : standH + 0.5;
+    const cz = DEM ? D.stand.z : P.stand.z;
     const dPos = new Float32Array(DUST * 3);
     const dPhase = new Float32Array(DUST);
     for (let i = 0; i < DUST; i++) {
-      dPos[i * 3] = (Math.random() - 0.5) * 46;
-      dPos[i * 3 + 1] = standH + 0.5 + Math.random() * 7;
-      dPos[i * 3 + 2] = P.stand.z + (Math.random() - 0.5) * 46;
-    dPhase[i] = Math.random() * Math.PI * 2;
+      dPos[i * 3] = cx + (Math.random() - 0.5) * 46;
+      dPos[i * 3 + 1] = cy + Math.random() * 7;
+      dPos[i * 3 + 2] = cz + (Math.random() - 0.5) * 46;
+      dPhase[i] = Math.random() * Math.PI * 2;
     }
     const dGeo = new THREE.BufferGeometry();
     dGeo.setAttribute('position', new THREE.BufferAttribute(dPos, 3));
@@ -871,6 +1267,7 @@ export function createTerrainScene(id, assets = {}) {
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
       vertexShader: /* glsl */ `
         attribute float aPhase;
         uniform float uTime;
@@ -902,8 +1299,10 @@ export function createTerrainScene(id, assets = {}) {
   }
 
   // ---- birds ---------------------------------------------------------------------
+  // In DEM scenes birds fly only at grounded (focus) vantages, at true scale —
+  // from the aerial overlook they'd be sub-pixel anyway.
   const birds = [];
-  if (!DEM) {
+  if (!DEM || P.dem.focus) {
     const wingGeo = new THREE.BufferGeometry();
     wingGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
       0, 0, -0.16,   0, 0, 0.14,   0.65, 0, -0.05,
@@ -911,39 +1310,75 @@ export function createTerrainScene(id, assets = {}) {
     ]), 3));
     wingGeo.computeVertexNormals();
     const birdMat = new THREE.MeshBasicMaterial({ color: 0x1a1611, side: THREE.DoubleSide });
-    for (let i = 0; i < 7; i++) {
+    const upm = DEM ? P.dem.unitsPerMeter : 1;
+    for (let i = 0; i < (DEM ? 4 : 7); i++) {
       const b = new THREE.Group();
       const wl = new THREE.Mesh(wingGeo, birdMat);
       wl.scale.x = -1;
       const wr = new THREE.Mesh(wingGeo, birdMat);
       b.add(wl, wr);
-      b.scale.setScalar(0.8 + Math.random() * 0.5);
-      b.userData = {
-        radius: P.birds.radius[0] + Math.random() * (P.birds.radius[1] - P.birds.radius[0]),
-        height: standH + P.birds.height[0] + Math.random() * (P.birds.height[1] - P.birds.height[0]),
+      if (DEM) {
+        // the wing spans ~1.3 units at scale 1, and 1 unit is 1/upm metres —
+        // so this lands a believable 3–5m raptor, not a 20m glider
+        b.scale.setScalar((2.5 + Math.random() * 1.5) * upm);
+        const mid = new THREE.Vector3().lerpVectors(D.stand, D.anchors.lookRest, 0.45);
+        b.userData = {
+          cx: mid.x, cz: mid.z,
+          radius: (250 + Math.random() * 350) * upm,
+          height: D.stand.y + (60 + Math.random() * 180) * upm,
+        };
+      } else {
+        b.scale.setScalar(0.8 + Math.random() * 0.5);
+        b.userData = {
+          cx: 0, cz: P.birds.cz,
+          radius: P.birds.radius[0] + Math.random() * (P.birds.radius[1] - P.birds.radius[0]),
+          height: standH + P.birds.height[0] + Math.random() * (P.birds.height[1] - P.birds.height[0]),
+        };
+      }
+      Object.assign(b.userData, {
         speed: 0.08 + Math.random() * 0.08,
         phase: Math.random() * Math.PI * 2,
         flap: 4.0 + Math.random() * 2.5,
         wl, wr,
-      };
+      });
       scene.add(b);
       birds.push(b);
     }
   }
 
   // ---- discovery beacons: faint pillars of light on the horizon ---------------------
+  // DEM scenes place beacons at the destination's TRUE geographic position
+  // (clamped to a horizon ring when it lies beyond the scene's coverage).
+  let beaconDefs = P.beacons || [];
+  if (DEM) {
+    const [bw, bs, be, bn] = assets.demGrid.meta.bbox;
+    const upm = P.dem.unitsPerMeter;
+    beaconDefs = (P.beacons || []).map((B) => {
+      const t = LOCATIONS.find((l) => l.id === B.to);
+      if (!t) return null;
+      const u = (t.lon - bw) / (be - bw);
+      const v = (bn - t.lat) / (bn - bs);
+      let [x, z] = D.sceneOf(u, v);
+      // targets beyond the DEM's coverage settle on its edge, true direction kept
+      x = THREE.MathUtils.clamp(x, D.xMin * 0.88, D.xMax * 0.88);
+      z = THREE.MathUtils.clamp(z, D.zFront * 0.88, D.zBack * 0.88);
+      return { ...B, x, z, h: 550 * upm * (P.dem.beaconScale ?? 1) };
+    }).filter(Boolean);
+  }
   const beacons = [];
-  for (const B of (DEM ? [] : (P.beacons || []))) {
+  for (const B of beaconDefs) {
     const groundY = H(B.x, B.z);
     const group = new THREE.Group();
+    const bs = B.h / 58; // radii keep the reference pillar's proportions
 
-    const pillarGeo = new THREE.CylinderGeometry(1.7, 2.4, B.h, 16, 1, true);
+    const pillarGeo = new THREE.CylinderGeometry(1.7 * bs, 2.4 * bs, B.h, 16, 1, true);
     const pillarMat = new THREE.ShaderMaterial({
       uniforms: { uTime: uniforms.uTime, uH: { value: B.h } },
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
       vertexShader: /* glsl */ `
         uniform float uH;
         varying float vH;
@@ -983,12 +1418,13 @@ export function createTerrainScene(id, assets = {}) {
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
       color: new THREE.Color(1.0, 0.8, 0.45),
       opacity: 0.55,
     });
     const glow = new THREE.Sprite(glowMat);
-    glow.position.set(B.x, groundY + 3.5, B.z);
-    glow.scale.set(16, 10, 1);
+    glow.position.set(B.x, groundY + 3.5 * bs, B.z);
+    glow.scale.set(16 * bs, 10 * bs, 1);
     group.add(glow);
 
     // slow-rising embers inside the pillar
@@ -997,7 +1433,7 @@ export function createTerrainScene(id, assets = {}) {
     const ePhase = new Float32Array(EMBERS);
     for (let i = 0; i < EMBERS; i++) {
       const a = Math.random() * Math.PI * 2;
-      const r = Math.random() * 1.6;
+      const r = Math.random() * 1.6 * bs;
       ePos[i * 3] = B.x + Math.cos(a) * r;
       ePos[i * 3 + 1] = groundY;
       ePos[i * 3 + 2] = B.z + Math.sin(a) * r;
@@ -1011,6 +1447,7 @@ export function createTerrainScene(id, assets = {}) {
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
       vertexShader: /* glsl */ `
         attribute float aPhase;
         uniform float uTime, uH;
@@ -1038,7 +1475,7 @@ export function createTerrainScene(id, assets = {}) {
     group.add(embers);
 
     const hit = new THREE.Mesh(
-      new THREE.CylinderGeometry(8, 8, B.h * 1.15, 8),
+      new THREE.CylinderGeometry(8 * bs, 8 * bs, B.h * 1.15, 8),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
     hit.position.set(B.x, groundY + B.h * 0.5, B.z);
@@ -1061,9 +1498,9 @@ export function createTerrainScene(id, assets = {}) {
       const u = b.userData;
       const a = t * u.speed + u.phase;
       b.position.set(
-        Math.cos(a) * u.radius,
-        u.height + Math.sin(t * 0.4 + u.phase) * 2.5,
-        P.birds.cz + Math.sin(a) * u.radius,
+        u.cx + Math.cos(a) * u.radius,
+        u.height + Math.sin(t * 0.4 + u.phase) * u.radius * 0.06,
+        u.cz + Math.sin(a) * u.radius,
       );
       b.rotation.y = -a - Math.PI / 2;
       const cycle = 0.5 + 0.5 * Math.sin(t * 0.35 + u.phase * 2.0);
@@ -1080,5 +1517,14 @@ export function createTerrainScene(id, assets = {}) {
     entryLook: new THREE.Vector3(P.entryLook[0], standH + P.entryLook[1], P.entryLook[2]),
   };
 
-  return { id, name: P.name, scene, update, anchors, beacons, hasWater: !!P.water && !DEM, dem: D };
+  // travel lift needs to clear local terrain — scale with the scene's relief
+  const liftHeight = DEM ? Math.max(D.peakY * 1.15, (D.zBack - D.zFront) * 0.2) : 260;
+
+  // water audio applies to disc water and DEM lake masks alike
+  const hasWater = !!W || !!(DEM && P.dem.water);
+
+  const setDetail = (v) => { uniforms.uDetail.value = v; };
+  const setPlates = (v) => { uniforms.uPlate.value = v; };
+
+  return { id, name: P.name, scene, update, anchors, beacons, hasWater, dem: D, csm, liftHeight, setDetail, setPlates };
 }
