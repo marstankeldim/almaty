@@ -85,14 +85,16 @@ export function createDirector({ camera, globe, scenes, ensureScene, onArrive })
   }
 
   function idleSway(t, A) {
+    // amplitudes come from the scene, in its own units (see anchors.sway)
+    const s = A.sway ?? { px: 0.6, py: 0.18, lx: 14, ly: 5 };
     camera.position.set(
-      A.stand.x + Math.sin(t * 0.19) * 0.6,
-      A.stand.y + Math.sin(t * 0.45) * 0.18,
+      A.stand.x + Math.sin(t * 0.19) * s.px,
+      A.stand.y + Math.sin(t * 0.45) * s.py,
       A.stand.z,
     );
     _look.copy(A.lookRest);
-    _look.x += Math.sin(t * 0.11) * 14;
-    _look.y += Math.sin(t * 0.23) * 5;
+    _look.x += Math.sin(t * 0.11) * s.lx;
+    _look.y += Math.sin(t * 0.23) * s.ly;
     camera.lookAt(_look);
   }
 

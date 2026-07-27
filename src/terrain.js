@@ -112,8 +112,18 @@ function buildDemSampler(P, demGrid) {
     stand = new THREE.Vector3(best.x * 0.35, camY, best.z + viewDist);
     look = new THREE.Vector3(best.x, peakY * 0.92, best.z);
   }
+  // Idle sway is expressed in metres, because the same amplitude that reads
+  // as a documentary drone drift from 400m up would put a standing eye
+  // underground. Grounded vantages get a human's near-stillness instead.
+  const grounded = !!cfg.focus && (cfg.camAboveM ?? 60) < 20;
+  const m = upm * vExag;
+  const sway = grounded
+    ? { px: 0.30 * m, py: 0.10 * m, lx: 9 * m, ly: 3 * m }
+    : { px: 6 * m, py: 1.8 * m, lx: 140 * m, ly: 50 * m };
+
   const anchors = {
     stand,
+    sway,
     lookRest: look,
     entryPos: new THREE.Vector3(
       stand.x + (look.x - stand.x) * -0.1,
@@ -294,10 +304,17 @@ const PRESETS = {
     // lake basin measured from the DEM itself: flattest contiguous region sits
     // at 2506m, uv (0.586, 0.714), ~714 × 1127m — the real Big Almaty Lake
     dem: {
-      station: [0.586, 0.600],  // north shore, just off the water
-      focus: [0.586, 0.760],    // gaze south down the lake into the cirque
-      camAboveM: 95,
-      lookLiftM: 420,
+      // Standing on the shore. Station measured off the DEM: a ledge at
+      // 2507.2m — 1.2m above the water — with only 0.2m of relief within
+      // ±25m, so a 1.7m eye cannot be buried by a neighbouring mesh vertex
+      // (quads here span ~14m), and open water due south for 400m.
+      station: [0.570, 0.688],
+      // Bearing scan from that station: SE has the longest water (838m) but
+      // only 2603m hills behind it, while SW crosses 237m of water into a
+      // 3356m wall standing 24.6deg above the eye at 1850m. Took the wall.
+      focus: [0.424, 0.870],
+      camAboveM: 1.7,           // human eye height
+      lookLiftM: -300,          // summit into the upper third, water below
       unitsPerMeter: 0.1,   // intimate scale: 1 unit = 10m
       vExag: 1.0,           // true proportions at close range
       fogColor: [0.60, 0.58, 0.56],
@@ -311,7 +328,10 @@ const PRESETS = {
       envYaw: 0,
       shadowFar: 1000,
       segX: 583, segZ: 558,
-      water: { center: [0.586, 0.714], radiusM: 330 },
+      water: {
+        center: [0.586, 0.714], radiusM: 330,
+        swellM: 45, chopM: 2.6, chopFadeM: 90, rippleAmp: 2.0, roughness: 0.14,
+      },
     },
   },
 
@@ -514,6 +534,22 @@ export function createTerrainScene(id, assets = {}) {
           float wz = fbmT(wp + vec2(0.0, we) + wDrift) - w0;
           float wNear = exp(-length(vWpos - cameraPosition) * ${((wcfg.rippleFadeM ? 1 / (wcfg.rippleFadeM * P.dem.unitsPerMeter) : 0.0016)).toFixed(6)});
           float wAmp = ${(wcfg.rippleAmp ?? 2.2).toFixed(2)} * wNear;
+          ${wcfg.chopM ? `
+          // Near-field chop. From a shoreline eye the water a few metres out
+          // is centimetres per pixel, where swell alone reads as a dead sheet;
+          // but this octave is far below the footprint further out, so it is
+          // faded hard with distance to stay the right side of aliasing.
+          float wChop = exp(-length(vWpos - cameraPosition) * ${(1 / (wcfg.chopFadeM * P.dem.unitsPerMeter)).toFixed(5)});
+          if (wChop > 0.02) {
+            vec2 cp = vWpos.xz * ${(1 / (wcfg.chopM * P.dem.unitsPerMeter)).toFixed(4)};
+            vec2 cDrift = vec2(uWaterTime * 0.09, uWaterTime * 0.05);
+            float c0 = fbmT(cp + cDrift);
+            float cx = fbmT(cp + vec2(0.14, 0.0) + cDrift) - c0;
+            float cz = fbmT(cp + vec2(0.0, 0.14) + cDrift) - c0;
+            wx += cx * wChop * 0.9;
+            wz += cz * wChop * 0.9;
+          }
+          ` : ''}
           normal = normalize(mix(normal, normalize(vec3(wx * wAmp, 1.0, wz * wAmp)), wet));
           roughnessFactor = mix(roughnessFactor, ${(wcfg.roughness ?? 0.16).toFixed(3)}, wet);
         }
